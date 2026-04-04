@@ -83,7 +83,11 @@ check_prerequisites() {
     fi
 
     # Check Go version (need 1.22+)
-    GO_VERSION=$(go version | grep -oP 'go\K[0-9]+\.[0-9]+' || echo "0.0")
+    GO_VERSION=$(go version | sed -n 's/.*go\([0-9]*\.[0-9]*\).*/\1/p')
+    if [ -z "$GO_VERSION" ]; then
+        err "Could not determine Go version"
+        exit 1
+    fi
     GO_MAJOR=$(echo "$GO_VERSION" | cut -d. -f1)
     GO_MINOR=$(echo "$GO_VERSION" | cut -d. -f2)
 
