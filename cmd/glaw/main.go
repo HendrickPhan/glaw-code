@@ -1,0 +1,234 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+
+	"github.com/hieu-glaw/glaw-code/internal/api"
+	"github.com/hieu-glaw/glaw-code/internal/cli"
+	"github.com/hieu-glaw/glaw-code/internal/config"
+	"github.com/hieu-glaw/glaw-code/internal/mcp"
+	"github.com/hieu-glaw/glaw-code/internal/runtime"
+	"github.com/hieu-glaw/glaw-code/internal/tools"
+	"github.com/hieu-glaw/glaw-code/internal/web"
+)
+
+func main() {
+	// Handle serve subcommand
+	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		serveCmd := flag.NewFlagSet("serve", flag.ExitOnError)
+		serveAddr := serveCmd.String("addr", ":8080", "Address to listen on")
+		serveOpen := serveCmd.Bool("open", true, "Open browser automatically")
+		serveModel := serveCmd.String("model", "", "Model to use")
+		serveConfigPath := serveCmd.String("config", "", "Path to config file")
+		serveCmd.Parse(os.Args[2:])
+
+		workspaceRoot, _ := os.Getwd()
+		settings, err := config.LoadAll(workspaceRoot)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: loading settings: %v\n", err)
+			settings = config.DefaultSettings()
+		}
+		if *serveConfigPath != "" {
+			explicit, err := config.LoadFromFile(*serveConfigPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: loading config %s: %v\n", *serveConfigPath, err)
+			} else if explicit != nil {
+				settings = config.Merge(settings, *explicit)
+			}
+		}
+		if *serveModel != "" {
+			settings.Model = *serveModel
+		}
+		cfg := runtime.ConfigFromSettings(settings)
+
+		client, err := api.NewProviderClient(cfg.Model)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating API client: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Set ANTHROPIC_API_KEY or XAI_API_KEY environment variable.\n")
+			os.Exit(1)
+		}
+
+		mcpManager := mcp.NewManager()
+		mcpConfigs := convertMCPConfigs(settings.MCPServers)
+		ctx := context.Background()
+		mcpManager.InitializeAll(ctx, mcpConfigs)
+
+		runtimeFactory := func(sess *runtime.Session) (*runtime.ConversationRuntime, func(), error) {
+			toolRegistry := tools.NewRegistry(workspaceRoot)
+			snapshotExec := runtime.NewSnapshottingExecutor(toolRegistry)
+			toolExec := runtime.NewCompositeToolExecutor(snapshotExec, mcpManager)
+			permManager := runtime.NewPermissionManager(cfg.PermissionMode, workspaceRoot)
+			rt := runtime.NewConversationRuntime(client, cfg, sess, permManager, toolExec)
+			rt.Snapshotter = snapshotExec
+			cleanup := func() {
+				snapshotExec.FinishBatch()
+			}
+			return rt, cleanup, nil
+		}
+
+		opts := web.ServeOpts{
+			Addr:           *serveAddr,
+			Open:           *serveOpen,
+			RuntimeFactory: runtimeFactory,
+		}
+		if err := web.Serve(opts); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Parse flags
+	var (
+		model       string
+		permissions string
+		sessionID   string
+		configPath  string
+		showVersion bool
+		noInput     bool
+	)
+
+	flag.StringVar(&model, "model", "", "Model to use (e.g. claude-sonnet-4-6, grok-3)")
+	flag.StringVar(&permissions, "permissions", "", "Permission mode (read_only, workspace_write, danger_full_access)")
+	flag.StringVar(&sessionID, "session", "", "Session ID to resume")
+	flag.StringVar(&configPath, "config", "", "Path to config file")
+	flag.BoolVar(&showVersion, "version", false, "Show version")
+	flag.BoolVar(&noInput, "no-input", false, "Non-interactive mode")
+	flag.Parse()
+
+	if showVersion {
+		fmt.Println("glaw-code v1.0.0")
+		os.Exit(0)
+	}
+
+	// Get remaining args as prompt
+	prompt := ""
+	args := flag.Args()
+	if len(args) > 0 {
+		prompt = args[0]
+	}
+
+	// Load config (layered: defaults -> global ~/.glaw/settings.json -> project .glaw/settings.json -> explicit --config -> CLI flags)
+	workspaceRoot, _ := os.Getwd()
+	settings, err := config.LoadAll(workspaceRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: loading settings: %v\n", err)
+		settings = config.DefaultSettings()
+	}
+
+	// If an explicit --config path is given, layer it on top
+	if configPath != "" {
+		explicit, err := config.LoadFromFile(configPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: loading config %s: %v\n", configPath, err)
+		} else if explicit != nil {
+			settings = config.Merge(settings, *explicit)
+		}
+	}
+
+	// Apply CLI flag overrides
+	if model != "" {
+		settings.Model = model
+	}
+	if permissions != "" {
+		settings.Permissions.Mode = permissions
+	}
+
+	cfg := runtime.ConfigFromSettings(settings)
+
+	// Create API client
+	client, err := api.NewProviderClient(cfg.Model)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating API client: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Set ANTHROPIC_API_KEY or XAI_API_KEY environment variable.\n")
+		os.Exit(1)
+	}
+
+	// Create or load session
+	session := runtime.NewSession()
+	if sessionID != "" {
+		loaded, err := runtime.LoadSession(filepath.Join(".glaw", "sessions", sessionID+".json"))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: loading session: %v\n", err)
+		} else {
+			session = loaded
+		}
+	}
+
+	// Create permission manager
+	permManager := runtime.NewPermissionManager(cfg.PermissionMode, workspaceRoot)
+
+	// Setup signal handling
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Initialize MCP manager
+	mcpManager := mcp.NewManager()
+	mcpConfigs := convertMCPConfigs(settings.MCPServers)
+	mcpManager.InitializeAll(ctx, mcpConfigs)
+
+	// Create tool executor (builtin tools + MCP)
+	toolRegistry := tools.NewRegistry(workspaceRoot)
+	snapshotExec := runtime.NewSnapshottingExecutor(toolRegistry)
+	toolExec := runtime.NewCompositeToolExecutor(snapshotExec, mcpManager)
+
+	// Create conversation runtime
+	rt := runtime.NewConversationRuntime(client, cfg, session, permManager, toolExec)
+	rt.Snapshotter = snapshotExec
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		fmt.Println("\nInterrupted. Saving session...")
+		mcpManager.Shutdown()
+		if path, err := runtime.SaveSession(session, filepath.Join(workspaceRoot, ".glaw", "sessions")); err == nil {
+			fmt.Printf("Session saved to %s\n", path)
+		}
+		cancel()
+	}()
+
+	// Run
+	if prompt != "" {
+		// One-shot mode
+		if err := cli.RunOneShot(ctx, rt, prompt); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	} else if !noInput {
+		// Interactive REPL
+		repl := cli.NewREPL(rt)
+		if err := repl.Run(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "No prompt provided and --no-input set. Nothing to do.")
+		os.Exit(1)
+	}
+}
+
+// convertMCPConfigs converts config.MCPServerConfig values to mcp.ServerConfig.
+func convertMCPConfigs(servers map[string]*config.MCPServerConfig) map[string]mcp.ServerConfig {
+	result := make(map[string]mcp.ServerConfig)
+	for name, cfg := range servers {
+		if cfg == nil {
+			continue
+		}
+		result[name] = mcp.ServerConfig{
+			Transport: cfg.Transport,
+			Command:   cfg.Command,
+			Args:      cfg.Args,
+			URL:       cfg.URL,
+			Headers:   cfg.Headers,
+			Env:       cfg.Env,
+		}
+	}
+	return result
+}
