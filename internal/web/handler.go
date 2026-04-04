@@ -90,6 +90,22 @@ func (s *WebServer) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 			s.handleCreateSession(conn)
 		case "get_history":
 			s.handleGetHistory(conn, msg.Data)
+		case "list_workspaces":
+			s.handleListWorkspaces(conn)
+		case "create_workspace":
+			s.handleCreateWorkspace(conn, msg.Data)
+		case "update_workspace":
+			s.handleUpdateWorkspace(conn, msg.Data)
+		case "delete_workspace":
+			s.handleDeleteWorkspace(conn, msg.Data)
+		case "activate_workspace":
+			s.handleActivateWorkspace(conn, msg.Data)
+		case "create_section":
+			s.handleCreateSection(conn, msg.Data)
+		case "update_section":
+			s.handleUpdateSection(conn, msg.Data)
+		case "delete_section":
+			s.handleDeleteSection(conn, msg.Data)
 		default:
 			sendWS(conn, WSResponse{Type: "error", Data: map[string]string{"error": "unknown message type: " + msg.Type}})
 		}
@@ -404,4 +420,150 @@ func joinTexts(texts []string) string {
 		result += t
 	}
 	return result
+}
+
+// --- Workspace WebSocket Handlers ---
+
+// handleListWorkspaces sends the current workspace list.
+func (s *WebServer) handleListWorkspaces(conn *websocket.Conn) {
+	workspaces := s.workspaces.List()
+	sendWS(conn, WSResponse{Type: "workspace_list", Data: workspaces})
+}
+
+// handleCreateWorkspace creates a new workspace.
+func (s *WebServer) handleCreateWorkspace(conn *websocket.Conn, data json.RawMessage) {
+	var req struct {
+		Name        string `json:"name"`
+		Path        string `json:"path"`
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(data, &req); err != nil {
+		sendWS(conn, WSResponse{Type: "error", Data: map[string]string{"error": "invalid workspace data"}})
+		return
+	}
+	if req.Name == "" {
+		sendWS(conn, WSResponse{Type: "error", Data: map[string]string{"error": "workspace name is required"}})
+		return
+	}
+	ws := s.workspaces.Create(req.Name, req.Path, req.Description)
+	sendWS(conn, WSResponse{Type: "workspace_created", Data: ws})
+	// Send updated list
+	s.handleListWorkspaces(conn)
+}
+
+// handleUpdateWorkspace updates a workspace.
+func (s *WebServer) handleUpdateWorkspace(conn *websocket.Conn, data json.RawMessage) {
+	var req struct {
+		ID          string `json:"id"`
+		Name        string `json:"name"`
+		Path        string `json:"path"`
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(data, &req); err != nil {
+		sendWS(conn, WSResponse{Type: "error", Data: map[string]string{"error": "invalid workspace data"}})
+		return
+	}
+	ws, err := s.workspaces.Update(req.ID, req.Name, req.Path, req.Description)
+	if err != nil {
+		sendWS(conn, WSResponse{Type: "error", Data: map[string]string{"error": err.Error()}})
+		return
+	}
+	sendWS(conn, WSResponse{Type: "workspace_updated", Data: ws})
+	s.handleListWorkspaces(conn)
+}
+
+// handleDeleteWorkspace deletes a workspace.
+func (s *WebServer) handleDeleteWorkspace(conn *websocket.Conn, data json.RawMessage) {
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(data, &req); err != nil {
+		sendWS(conn, WSResponse{Type: "error", Data: map[string]string{"error": "invalid workspace data"}})
+		return
+	}
+	if err := s.workspaces.Delete(req.ID); err != nil {
+		sendWS(conn, WSResponse{Type: "error", Data: map[string]string{"error": err.Error()}})
+		return
+	}
+	sendWS(conn, WSResponse{Type: "workspace_deleted", Data: map[string]string{"id": req.ID}})
+	s.handleListWorkspaces(conn)
+}
+
+// handleActivateWorkspace sets a workspace as the active one.
+func (s *WebServer) handleActivateWorkspace(conn *websocket.Conn, data json.RawMessage) {
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(data, &req); err != nil {
+		sendWS(conn, WSResponse{Type: "error", Data: map[string]string{"error": "invalid workspace data"}})
+		return
+	}
+	ws, err := s.workspaces.SetActive(req.ID)
+	if err != nil {
+		sendWS(conn, WSResponse{Type: "error", Data: map[string]string{"error": err.Error()}})
+		return
+	}
+	sendWS(conn, WSResponse{Type: "workspace_activated", Data: ws})
+	s.handleListWorkspaces(conn)
+}
+
+// handleCreateSection adds a section to a workspace.
+func (s *WebServer) handleCreateSection(conn *websocket.Conn, data json.RawMessage) {
+	var req struct {
+		WorkspaceID string `json:"workspace_id"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Color       string `json:"color"`
+	}
+	if err := json.Unmarshal(data, &req); err != nil {
+		sendWS(conn, WSResponse{Type: "error", Data: map[string]string{"error": "invalid section data"}})
+		return
+	}
+	sec, err := s.workspaces.CreateSection(req.WorkspaceID, req.Name, req.Description, req.Color)
+	if err != nil {
+		sendWS(conn, WSResponse{Type: "error", Data: map[string]string{"error": err.Error()}})
+		return
+	}
+	sendWS(conn, WSResponse{Type: "section_created", Data: sec})
+	s.handleListWorkspaces(conn)
+}
+
+// handleUpdateSection updates a section within a workspace.
+func (s *WebServer) handleUpdateSection(conn *websocket.Conn, data json.RawMessage) {
+	var req struct {
+		WorkspaceID string `json:"workspace_id"`
+		SectionID   string `json:"section_id"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Color       string `json:"color"`
+	}
+	if err := json.Unmarshal(data, &req); err != nil {
+		sendWS(conn, WSResponse{Type: "error", Data: map[string]string{"error": "invalid section data"}})
+		return
+	}
+	sec, err := s.workspaces.UpdateSection(req.WorkspaceID, req.SectionID, req.Name, req.Description, req.Color)
+	if err != nil {
+		sendWS(conn, WSResponse{Type: "error", Data: map[string]string{"error": err.Error()}})
+		return
+	}
+	sendWS(conn, WSResponse{Type: "section_updated", Data: sec})
+	s.handleListWorkspaces(conn)
+}
+
+// handleDeleteSection removes a section from a workspace.
+func (s *WebServer) handleDeleteSection(conn *websocket.Conn, data json.RawMessage) {
+	var req struct {
+		WorkspaceID string `json:"workspace_id"`
+		SectionID   string `json:"section_id"`
+	}
+	if err := json.Unmarshal(data, &req); err != nil {
+		sendWS(conn, WSResponse{Type: "error", Data: map[string]string{"error": "invalid section data"}})
+		return
+	}
+	if err := s.workspaces.DeleteSection(req.WorkspaceID, req.SectionID); err != nil {
+		sendWS(conn, WSResponse{Type: "error", Data: map[string]string{"error": err.Error()}})
+		return
+	}
+	sendWS(conn, WSResponse{Type: "section_deleted", Data: map[string]string{"workspace_id": req.WorkspaceID, "section_id": req.SectionID}})
+	s.handleListWorkspaces(conn)
 }

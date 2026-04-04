@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef } from "react";
-import { ChatMessage, SessionInfo, ToolResultInfo, ToolUseInfo, UsageInfo, WSIncoming } from "@/lib/types";
+import { ChatMessage, SessionInfo, ToolResultInfo, ToolUseInfo, UsageInfo, WSIncoming, WorkspaceInfo } from "@/lib/types";
 
 let msgCounter = 0;
 function nextId() {
@@ -14,6 +14,7 @@ export function useChat() {
   const [sessionId, setSessionId] = useState<string>("");
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [usage, setUsage] = useState<UsageInfo | null>(null);
+  const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
 
   const toolStartTimes = useRef<Map<string, number>>(new Map());
 
@@ -99,6 +100,14 @@ export function useChat() {
     setMessages(restored);
   }, []);
 
+  // Parse workspace data from WS messages
+  const parseWorkspaces = useCallback((data: unknown): WorkspaceInfo[] => {
+    if (Array.isArray(data)) {
+      return data as WorkspaceInfo[];
+    }
+    return [];
+  }, []);
+
   const handleWSMessage = useCallback(
     (msg: WSIncoming) => {
       const type = msg.type as string;
@@ -148,9 +157,31 @@ export function useChat() {
         case "usage":
           if (d) setUsage(d as UsageInfo);
           break;
+
+        // --- Workspace events ---
+        case "workspace_list":
+          setWorkspaces(parseWorkspaces(d));
+          break;
+        case "workspace_created":
+        case "workspace_updated":
+        case "workspace_deleted":
+        case "workspace_activated":
+        case "section_created":
+        case "section_updated":
+        case "section_deleted":
+          // These are followed by an updated workspace_list from the server,
+          // so we just wait for that. If the server doesn't send a list
+          // automatically, the data is the single updated workspace.
+          // The server handlers send workspace_list after each mutation,
+          // so the workspace_list handler above will update the state.
+          // But also handle the case where the data contains the list:
+          if (Array.isArray(d)) {
+            setWorkspaces(d as WorkspaceInfo[]);
+          }
+          break;
       }
     },
-    [addAssistantMessage, addToolUse, addToolResult, sessionId, loadHistory]
+    [addAssistantMessage, addToolUse, addToolResult, sessionId, loadHistory, parseWorkspaces]
   );
 
   return {
@@ -159,6 +190,7 @@ export function useChat() {
     sessionId,
     sessions,
     usage,
+    workspaces,
     setSessionId,
     addUserMessage,
     clearMessages,

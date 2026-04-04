@@ -38,5 +38,27 @@ export interface UsageInfo {
   totalCostUSD: number;
 }
 
+// --- Workspace types ---
+
+export interface SectionInfo {
+  id: string;
+  name: string;
+  description: string;
+  color: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkspaceInfo {
+  id: string;
+  name: string;
+  path: string;
+  description: string;
+  sections: SectionInfo[];
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type WSIncoming = Record<string, any>;
