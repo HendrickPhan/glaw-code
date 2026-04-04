@@ -153,7 +153,7 @@ func renderToolDone(name string, output string, isError bool, elapsed time.Durat
 	if len(display) > 80 {
 		display = display[:77] + "..."
 	}
-	return fmt.Sprintf("%s  ✓ %s%s %s(%.0fms)%s", ansiGreen, name, ansiReset, ansiDim, ms, ansiReset)
+	return fmt.Sprintf("%s  ✓ %s%s %s(%.0fms)%s %s", ansiGreen, name, ansiReset, ansiDim, ms, ansiReset, display)
 }
 
 // ConversationMessage represents a single message in a conversation.
@@ -750,9 +750,7 @@ Always execute the actual tool calls to accomplish the task. Do NOT just describ
 
 	if b.ToolDescriptions != nil {
 		parts = append(parts, "\n## Available Tools")
-		for _, desc := range b.ToolDescriptions {
-			parts = append(parts, desc)
-		}
+		parts = append(parts, b.ToolDescriptions...)
 	}
 
 	if b.CustomInstructions != "" {
@@ -1103,7 +1101,9 @@ func (r *ConversationRuntime) GetAllSettings() map[string]interface{} {
 	if err != nil {
 		return result
 	}
-	json.Unmarshal(data, &result)
+	if err := json.Unmarshal(data, &result); err != nil {
+		return result
+	}
 	return result
 }
 

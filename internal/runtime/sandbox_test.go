@@ -135,7 +135,9 @@ func TestEnsureExplicitStaging(t *testing.T) {
 
 func TestSecurityCheckWorkspaceNotDir(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "file.txt")
-	os.WriteFile(tmpFile, []byte("test"), 0o644)
+	if err := os.WriteFile(tmpFile, []byte("test"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	errs := RunSecurityChecks(tmpFile)
 	if len(errs) == 0 {

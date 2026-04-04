@@ -56,7 +56,10 @@ type EnhancedPermissionManager struct {
 
 // NewEnhancedPermissionManager creates a new permission manager with the given mode and workspace root.
 func NewEnhancedPermissionManager(mode PermissionMode, workspaceRoot string) *EnhancedPermissionManager {
-	absRoot, _ := filepath.Abs(workspaceRoot)
+	absRoot, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		absRoot = workspaceRoot
+	}
 	return &EnhancedPermissionManager{
 		Mode:          mode,
 		WorkspaceRoot: absRoot,

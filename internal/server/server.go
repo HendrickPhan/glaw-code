@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -340,7 +339,7 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request, id string) 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func writeSSE(w http.ResponseWriter, flusher http.Flusher, event SessionEvent) {
@@ -355,13 +354,4 @@ func (s *Server) Start(addr string) error {
 	return http.ListenAndServe(addr, s.Handler())
 }
 
-// Helper to build session directory path.
-func sessionDir(baseDir string) string {
-	return filepath.Join(baseDir, ".glaw", "sessions")
-}
 
-// ParseSessionID extracts session ID from a filename.
-func ParseSessionID(filename string) string {
-	base := filepath.Base(filename)
-	return strings.TrimSuffix(base, filepath.Ext(base))
-}

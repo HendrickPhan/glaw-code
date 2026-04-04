@@ -76,7 +76,7 @@ func TestManagerSpawn(t *testing.T) {
 	if a.Type != TypeExplore {
 		t.Fatalf("expected type Explore, got %q", a.Type)
 	}
-	if a.Status != StatusPending && a.Status != StatusRunning {
+	if a.GetStatus() != StatusPending && a.GetStatus() != StatusRunning {
 		t.Fatalf("expected pending or running status, got %q", a.Status)
 	}
 

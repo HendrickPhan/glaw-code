@@ -1,6 +1,6 @@
 # Golang Rewrite Documentation — Index
 
-Complete documentation of the Claw Code project for a Go rewrite. Based on the Rust production implementation.
+Complete documentation of the Glaw Code project for a Go rewrite. Based on the Rust production implementation.
 
 ## Documents
 
@@ -23,9 +23,9 @@ Complete documentation of the Claw Code project for a Go rewrite. Based on the R
 ## Suggested Go Project Layout
 
 ```
-claw-go/
+glaw-go/
 ├── cmd/
-│   └── claw/
+│   └── glaw/
 │       └── main.go              # Entry point
 ├── internal/
 │   ├── api/

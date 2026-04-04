@@ -289,7 +289,7 @@ func (d *Dispatcher) handleHelp() (*Result, error) {
 
 	categories := []Category{CategoryCore, CategoryWorkspace, CategorySession, CategoryGit, CategoryAutomation}
 	for _, cat := range categories {
-		sb.WriteString(fmt.Sprintf("  %s:\n", strings.Title(string(cat))))
+		sb.WriteString(fmt.Sprintf("  %s:\n", strings.ToUpper(string(cat[:1])) + string(cat[1:])))
 		for _, spec := range Specs {
 			if spec.Category == cat {
 				aliases := ""
@@ -530,7 +530,9 @@ func (d *Dispatcher) handleMemory(remainder string) (*Result, error) {
 		name := parts[1]
 		content := strings.Join(parts[2:], " ")
 		memDir := filepath.Join(".glaw", "memory")
-		os.MkdirAll(memDir, 0o755)
+		if err := os.MkdirAll(memDir, 0o755); err != nil {
+			return &Result{Action: "continue", Message: "Error creating memory directory: " + err.Error()}, nil
+		}
 		path := filepath.Join(memDir, name+".md")
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			return &Result{Action: "continue", Message: "Error writing memory: " + err.Error()}, nil
@@ -729,7 +731,9 @@ func (d *Dispatcher) handlePlugin(remainder string) (*Result, error) {
 			return &Result{Action: "continue", Message: "Invalid plugin manifest: missing name field"}, nil
 		}
 		pluginDir := filepath.Join(".glaw", "plugins", manifest.Name)
-		os.MkdirAll(pluginDir, 0o755)
+		if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+			return &Result{Action: "continue", Message: "Failed to create plugin directory: " + err.Error()}, nil
+		}
 		dstPath := filepath.Join(pluginDir, "manifest.json")
 		if err := os.WriteFile(dstPath, srcData, 0o644); err != nil {
 			return &Result{Action: "continue", Message: "Failed to install plugin: " + err.Error()}, nil

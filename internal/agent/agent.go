@@ -47,6 +47,13 @@ type Agent struct {
 	endTime *time.Time
 }
 
+// GetStatus returns the agent's current status in a thread-safe manner.
+func (a *Agent) GetStatus() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.Status
+}
+
 // newAgent allocates an Agent ready for execution.  The caller must still
 // call run() (typically from Manager.Spawn) to start processing.
 func newAgent(id string, agentType AgentType, prompt string, rt *runtime.ConversationRuntime) *Agent {

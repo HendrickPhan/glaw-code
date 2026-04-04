@@ -102,7 +102,7 @@ func newMockMCPServer(t *testing.T, cfg mockMCPConfig) *mockMCPServer {
 		case "tools/call":
 			var params mcp.MCPToolCallParams
 			if req.Params != nil {
-				json.Unmarshal(req.Params, &params)
+				_ = json.Unmarshal(req.Params, &params)
 			}
 			handler, ok := cfg.ToolHandlers[params.Name]
 			if !ok {
@@ -128,7 +128,7 @@ func newMockMCPServer(t *testing.T, cfg mockMCPConfig) *mockMCPServer {
 			}
 		}
 
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	})
 
 	ms.server = httptest.NewServer(handler)
@@ -222,7 +222,7 @@ func TestE2EMCPInitializeAndDiscoverTools(t *testing.T) {
 		t.Errorf("tool.ServerName = %q", tools[0].ServerName)
 	}
 
-	mgr.Shutdown()
+	_ = mgr.Shutdown()
 }
 
 func TestE2EMCPInitializeMultipleServers(t *testing.T) {
@@ -243,7 +243,7 @@ func TestE2EMCPInitializeMultipleServers(t *testing.T) {
 
 	ctx := context.Background()
 	mgr := mcp.NewManager()
-	mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
+	_ = mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
 		"weather-srv": {Transport: "http", URL: mock1.URL()},
 		"calc-srv":    {Transport: "http", URL: mock2.URL()},
 	})
@@ -255,7 +255,7 @@ func TestE2EMCPInitializeMultipleServers(t *testing.T) {
 		t.Error("both tools should be discovered")
 	}
 
-	mgr.Shutdown()
+	_ = mgr.Shutdown()
 }
 
 func TestE2EMCPToolCallSuccess(t *testing.T) {
@@ -272,7 +272,7 @@ func TestE2EMCPToolCallSuccess(t *testing.T) {
 
 	ctx := context.Background()
 	mgr := mcp.NewManager()
-	mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
+	_ = mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
 		"weather": {Transport: "http", URL: mock.URL()},
 	})
 
@@ -290,7 +290,7 @@ func TestE2EMCPToolCallSuccess(t *testing.T) {
 		t.Error("IsError should be false")
 	}
 
-	mgr.Shutdown()
+	_ = mgr.Shutdown()
 }
 
 func TestE2EMCPToolCallError(t *testing.T) {
@@ -304,7 +304,7 @@ func TestE2EMCPToolCallError(t *testing.T) {
 
 	ctx := context.Background()
 	mgr := mcp.NewManager()
-	mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
+	_ = mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
 		"test": {Transport: "http", URL: mock.URL()},
 	})
 
@@ -316,7 +316,7 @@ func TestE2EMCPToolCallError(t *testing.T) {
 		t.Error("IsError should be true")
 	}
 
-	mgr.Shutdown()
+	_ = mgr.Shutdown()
 }
 
 func TestE2EMCPToolCallUnknownTool(t *testing.T) {
@@ -341,7 +341,7 @@ func TestE2EMCPProtocolHandshake(t *testing.T) {
 
 	ctx := context.Background()
 	mgr := mcp.NewManager()
-	mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
+	_ = mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
 		"handshake-test": {Transport: "http", URL: mock.URL()},
 	})
 
@@ -363,7 +363,7 @@ func TestE2EMCPProtocolHandshake(t *testing.T) {
 		t.Errorf("tools/list not called; calls = %v", calls)
 	}
 
-	mgr.Shutdown()
+	_ = mgr.Shutdown()
 }
 
 func TestE2EMCPShutdown(t *testing.T) {
@@ -375,7 +375,7 @@ func TestE2EMCPShutdown(t *testing.T) {
 
 	ctx := context.Background()
 	mgr := mcp.NewManager()
-	mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
+	_ = mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
 		"shutdown-test": {Transport: "http", URL: mock.URL()},
 	})
 
@@ -392,7 +392,7 @@ func TestE2EMCPInitializeFailure(t *testing.T) {
 
 	ctx := context.Background()
 	mgr := mcp.NewManager()
-	mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
+	_ = mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
 		"fail-init": {Transport: "http", URL: mock.URL()},
 	})
 
@@ -409,7 +409,7 @@ func TestE2EMCPToolsListFailure(t *testing.T) {
 
 	ctx := context.Background()
 	mgr := mcp.NewManager()
-	mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
+	_ = mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
 		"fail-tools": {Transport: "http", URL: mock.URL()},
 	})
 
@@ -432,7 +432,7 @@ func TestE2EMCPInitializeAllWithHTTPTransport(t *testing.T) {
 
 	ctx := context.Background()
 	mgr := mcp.NewManager()
-	mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
+	_ = mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
 		"http-server": {Transport: "http", URL: mock.URL()},
 	})
 
@@ -448,13 +448,13 @@ func TestE2EMCPInitializeAllWithHTTPTransport(t *testing.T) {
 		t.Errorf("Text = %q, want 'hello'", result.Content[0].Text)
 	}
 
-	mgr.Shutdown()
+	_ = mgr.Shutdown()
 }
 
 func TestE2EMCPInitializeAllUnsupportedTransport(t *testing.T) {
 	ctx := context.Background()
 	mgr := mcp.NewManager()
-	mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
+	_ = mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
 		"ws-server": {Transport: "websocket", URL: "ws://localhost:9999"},
 	})
 	if mgr.ToolCount() != 0 {
@@ -473,7 +473,7 @@ func TestE2EMCPToolCallTimeout(t *testing.T) {
 	defer cancel()
 
 	mgr := mcp.NewManager()
-	mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
+	_ = mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
 		"slow": {Transport: "http", URL: slowServer.URL},
 	})
 

@@ -53,7 +53,9 @@ func TestBashTimeout(t *testing.T) {
 func TestReadFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.txt")
-	os.WriteFile(path, []byte("hello world"), 0o644)
+	if err := os.WriteFile(path, []byte("hello world"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	r := NewRegistry(dir)
 	out, err := r.ExecuteTool(context.Background(), "read_file", json.RawMessage(`{"path":"test.txt"}`))
@@ -103,7 +105,9 @@ func TestWriteFile(t *testing.T) {
 func TestWriteFileOverwrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.txt")
-	os.WriteFile(path, []byte("old"), 0o644)
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	r := NewRegistry(dir)
 	out, err := r.ExecuteTool(context.Background(), "write_file", json.RawMessage(`{"path":"test.txt","content":"new"}`))
@@ -123,7 +127,9 @@ func TestWriteFileOverwrite(t *testing.T) {
 func TestEditFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.txt")
-	os.WriteFile(path, []byte("hello world"), 0o644)
+	if err := os.WriteFile(path, []byte("hello world"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	r := NewRegistry(dir)
 	out, err := r.ExecuteTool(context.Background(), "edit_file", json.RawMessage(`{"path":"test.txt","old_string":"world","new_string":"Go"}`))
@@ -143,7 +149,9 @@ func TestEditFile(t *testing.T) {
 func TestEditFileNotFound(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.txt")
-	os.WriteFile(path, []byte("hello world"), 0o644)
+	if err := os.WriteFile(path, []byte("hello world"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	r := NewRegistry(dir)
 	out, err := r.ExecuteTool(context.Background(), "edit_file", json.RawMessage(`{"path":"test.txt","old_string":"missing","new_string":"x"}`))
@@ -158,7 +166,9 @@ func TestEditFileNotFound(t *testing.T) {
 func TestEditFileMultipleOccurrences(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.txt")
-	os.WriteFile(path, []byte("aaa bbb aaa"), 0o644)
+	if err := os.WriteFile(path, []byte("aaa bbb aaa"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	r := NewRegistry(dir)
 	out, err := r.ExecuteTool(context.Background(), "edit_file", json.RawMessage(`{"path":"test.txt","old_string":"aaa","new_string":"x"}`))
@@ -172,9 +182,15 @@ func TestEditFileMultipleOccurrences(t *testing.T) {
 
 func TestGlobSearch(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "a.go"), []byte("package main"), 0o644)
-	os.WriteFile(filepath.Join(dir, "b.go"), []byte("package main"), 0o644)
-	os.WriteFile(filepath.Join(dir, "c.txt"), []byte("text"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package main"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b.go"), []byte("package main"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "c.txt"), []byte("text"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	r := NewRegistry(dir)
 	out, err := r.ExecuteTool(context.Background(), "glob_search", json.RawMessage(`{"pattern":"*.go"}`))
@@ -208,8 +224,12 @@ func TestGlobSearchNoMatch(t *testing.T) {
 
 func TestGrepSearch(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "a.go"), []byte("package main\nfunc hello() {}\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, "b.go"), []byte("package main\nfunc world() {}\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package main\nfunc hello() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b.go"), []byte("package main\nfunc world() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	r := NewRegistry(dir)
 	out, err := r.ExecuteTool(context.Background(), "grep_search", json.RawMessage(`{"pattern":"func hello"}`))
@@ -229,7 +249,9 @@ func TestGrepSearch(t *testing.T) {
 
 func TestGrepSearchNoMatch(t *testing.T) {
 	r := NewRegistry(t.TempDir())
-	os.WriteFile(filepath.Join(t.TempDir(), "test.txt"), []byte("hello"), 0o644)
+	if err := os.WriteFile(filepath.Join(t.TempDir(), "test.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := r.ExecuteTool(context.Background(), "grep_search", json.RawMessage(`{"pattern":"xyz123"}`))
 	if err != nil {
@@ -275,7 +297,7 @@ func TestGetToolSpecs(t *testing.T) {
 func TestWebFetch(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Hello from server"))
+		_, _ = w.Write([]byte("Hello from server"))
 	}))
 	defer ts.Close()
 

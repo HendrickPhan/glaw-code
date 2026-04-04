@@ -53,6 +53,7 @@ func TestParseHelp(t *testing.T) {
 	parsed, _ := Parse("/help")
 	if parsed == nil {
 		t.Fatal("expected parsed command")
+		return
 	}
 	if parsed.Spec.Name != "help" {
 		t.Errorf("Name = %q, want %q", parsed.Spec.Name, "help")
@@ -64,6 +65,7 @@ func TestParseWithAlias(t *testing.T) {
 		parsed, _ := Parse(input)
 		if parsed == nil {
 			t.Fatalf("Parse(%q) returned nil", input)
+			return
 		}
 		if parsed.Spec.Name != "help" {
 			t.Errorf("Parse(%q).Name = %q, want %q", input, parsed.Spec.Name, "help")
@@ -75,6 +77,7 @@ func TestParseWithArgument(t *testing.T) {
 	parsed, _ := Parse("/model claude-opus-4-6")
 	if parsed == nil {
 		t.Fatal("expected parsed command")
+		return
 	}
 	if parsed.Spec.Name != "model" {
 		t.Errorf("Name = %q", parsed.Spec.Name)

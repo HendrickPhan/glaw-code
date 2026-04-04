@@ -36,7 +36,7 @@ func TestAnthropicClientSendMessage(t *testing.T) {
 
 		w.Header().Set("x-request-id", "req_456")
 		w.WriteHeader(http.StatusOK)
-		w.Write(body)
+		_, _ = w.Write(body)
 	}))
 	defer server.Close()
 
@@ -80,7 +80,7 @@ func TestAnthropicClientRetryOn429(t *testing.T) {
 		calls++
 		if calls == 1 {
 			w.WriteHeader(http.StatusTooManyRequests)
-			w.Write([]byte(`{"error":"rate limit"}`))
+			_, _ = w.Write([]byte(`{"error":"rate limit"}`))
 			return
 		}
 		resp := Response{
@@ -91,7 +91,7 @@ func TestAnthropicClientRetryOn429(t *testing.T) {
 		}
 		body, _ := json.Marshal(resp)
 		w.WriteHeader(http.StatusOK)
-		w.Write(body)
+		_, _ = w.Write(body)
 	}))
 	defer server.Close()
 
@@ -122,7 +122,7 @@ func TestAnthropicClientRetryOn429(t *testing.T) {
 func TestAnthropicClientRetriesExhausted(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte(`{"error":"overloaded"}`))
+		_, _ = w.Write([]byte(`{"error":"overloaded"}`))
 	}))
 	defer server.Close()
 
@@ -157,7 +157,7 @@ func TestAnthropicClientRetriesExhausted(t *testing.T) {
 func TestAnthropicClientNonRetryableError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte(`{"error":"invalid key"}`))
+		_, _ = w.Write([]byte(`{"error":"invalid key"}`))
 	}))
 	defer server.Close()
 

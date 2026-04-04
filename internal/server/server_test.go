@@ -59,7 +59,7 @@ func TestListSessionsEmpty(t *testing.T) {
 
 	var resp ListSessionsResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("Decode error: %v", err)
+		t.Fatalf("Decode: %v", err)
 	}
 	if len(resp.Sessions) != 0 {
 		t.Errorf("Sessions = %d, want 0", len(resp.Sessions))
@@ -86,7 +86,9 @@ func TestCreateAndGetSession(t *testing.T) {
 	s.createSession(createW, createReq)
 
 	var createResp CreateSessionResponse
-	json.NewDecoder(createW.Body).Decode(&createResp)
+	if err := json.NewDecoder(createW.Body).Decode(&createResp); err != nil {
+			t.Fatalf("Decode createResp: %v", err)
+		}
 
 	// Get
 	getReq := httptest.NewRequest(http.MethodGet, "/sessions/"+createResp.SessionID, nil)
@@ -98,7 +100,7 @@ func TestCreateAndGetSession(t *testing.T) {
 	}
 
 	var details SessionDetailsResponse
-	json.NewDecoder(getW.Body).Decode(&details)
+	if err := json.NewDecoder(getW.Body).Decode(&details); err != nil { t.Fatalf("Decode: %v", err) }
 	if details.ID != createResp.SessionID {
 		t.Errorf("ID = %q, want %q", details.ID, createResp.SessionID)
 	}
@@ -120,7 +122,7 @@ func TestListSessionsAfterCreate(t *testing.T) {
 	s.listSessions(w, req)
 
 	var resp ListSessionsResponse
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil { t.Fatalf("Decode: %v", err) }
 	if len(resp.Sessions) != 2 {
 		t.Errorf("Sessions count = %d, want 2", len(resp.Sessions))
 	}
@@ -146,7 +148,9 @@ func TestSendMessageInvalidBody(t *testing.T) {
 	createW := httptest.NewRecorder()
 	s.createSession(createW, createReq)
 	var createResp CreateSessionResponse
-	json.NewDecoder(createW.Body).Decode(&createResp)
+	if err := json.NewDecoder(createW.Body).Decode(&createResp); err != nil {
+			t.Fatalf("Decode createResp: %v", err)
+		}
 
 	// Send invalid JSON
 	body := strings.NewReader("not json")

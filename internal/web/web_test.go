@@ -111,6 +111,7 @@ func TestNewWebServer(t *testing.T) {
 	srv := NewWebServer(nil)
 	if srv == nil {
 		t.Fatal("expected non-nil server")
+		return
 	}
 	if srv.store == nil {
 		t.Error("expected non-nil store")
@@ -155,8 +156,10 @@ func TestWebServerHandlerRoutes(t *testing.T) {
 		t.Errorf("POST /api/sessions status = %d, want %d", resp.StatusCode, http.StatusCreated)
 	}
 	var createResp map[string]string
-	json.NewDecoder(resp.Body).Decode(&createResp)
-	if createResp["session_id"] == "" {
+	if err := json.NewDecoder(resp.Body).Decode(&createResp); err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
+		if createResp["session_id"] == "" {
 		t.Error("expected session_id in response")
 	}
 }
@@ -222,8 +225,10 @@ func TestWebServerSessionListAfterCreate(t *testing.T) {
 	defer resp.Body.Close()
 
 	var listResp map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&listResp)
-	sessions, ok := listResp["sessions"].([]interface{})
+	if err := json.NewDecoder(resp.Body).Decode(&listResp); err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
+		sessions, ok := listResp["sessions"].([]interface{})
 	if !ok {
 		t.Fatalf("expected sessions array, got %T", listResp["sessions"])
 	}
@@ -279,8 +284,10 @@ func TestWebServerCreateAndGetSession(t *testing.T) {
 		t.Fatalf("POST /api/sessions error: %v", err)
 	}
 	var createResp map[string]string
-	json.NewDecoder(resp.Body).Decode(&createResp)
-	resp.Body.Close()
+	if err := json.NewDecoder(resp.Body).Decode(&createResp); err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
+		resp.Body.Close()
 
 	sessionID := createResp["session_id"]
 	if sessionID == "" {
@@ -299,8 +306,10 @@ func TestWebServerCreateAndGetSession(t *testing.T) {
 	}
 
 	var details map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&details)
-	if details["id"] != sessionID {
+		if err := json.NewDecoder(resp.Body).Decode(&details); err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
+		if details["id"] != sessionID {
 		t.Errorf("session id = %v, want %q", details["id"], sessionID)
 	}
 }

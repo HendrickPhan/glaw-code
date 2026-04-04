@@ -115,7 +115,7 @@ type ConversationMessage struct {
 save_session(session, path):
   1. Serialize session to JSON using custom JSON renderer
   2. Create parent directory if not exists
-  3. Write to path (e.g. .claw/sessions/{id}.json)
+  3. Write to path (e.g. .glaw/sessions/{id}.json)
 ```
 
 **Load:**
@@ -157,7 +157,7 @@ compact_session(session, config):
 ```go
 type SystemPromptBuilder struct {
     ProjectContext     string   // file tree, language stats
-    InstructionFiles   []string // CLAW.md, .claw/CLAW.md contents
+    InstructionFiles   []string // GLAW.md, .glaw/GLAW.md contents
     GitStatus          string   // output of git status
     GitDiff            string   // output of git diff
     ToolDescriptions   []string // formatted tool specs
@@ -183,9 +183,9 @@ type SystemPromptBuilder struct {
 ```
 
 **Instruction file discovery:**
-1. `{project_root}/CLAW.md`
-2. `{project_root}/.claw/CLAW.md`
-3. Any `{project_root}/.claw/instructions/*.md` files
+1. `{project_root}/GLAW.md`
+2. `{project_root}/.glaw/GLAW.md`
+3. Any `{project_root}/.glaw/instructions/*.md` files
 
 ---
 
@@ -200,7 +200,7 @@ type RemoteSessionContext struct {
 }
 ```
 
-**Detection:** Read `CLAW_CODE_REMOTE` environment variable. If set, enable remote mode.
+**Detection:** Read `GLAW_CODE_REMOTE` environment variable. If set, enable remote mode.
 
 ### Upstream Proxy
 
@@ -273,7 +273,7 @@ exchange_code(code, pkce):
      - client_id = {client_id}
      - code_verifier = {pkce.code_verifier}
   2. Parse response into OAuthToken
-  3. Save credentials to ~/.claw/credentials
+  3. Save credentials to ~/.glaw/credentials
 
 refresh_token(token):
   1. IF token not expired: return token

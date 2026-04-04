@@ -333,9 +333,14 @@ func TestLoadConfig(t *testing.T) {
 		Temperature:    0.7,
 		PermissionMode: PermReadOnly,
 	}
-	data, _ := json.Marshal(cfg)
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
 	path := filepath.Join(dir, "config.json")
-	os.WriteFile(path, data, 0o644)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	loaded, err := LoadConfig(path)
 	if err != nil {

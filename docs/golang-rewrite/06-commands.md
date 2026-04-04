@@ -64,10 +64,10 @@ func HandleSlashCommand(ctx context.Context, cmd SlashCommand, runtime *Conversa
 | permissions | Direct | IF remainder: change mode; ELSE: print current mode |
 | clear | Direct | Clear session messages, print confirmation |
 | cost | Direct | Print usage tracker: total tokens, estimated cost |
-| resume | Runtime | Load session from .claw/sessions/{id}, restore conversation |
+| resume | Runtime | Load session from .glaw/sessions/{id}, restore conversation |
 | config | Runtime | Read/write config values (see Config tool) |
-| memory | Runtime | Manage .claw/memory/ files |
-| init | Direct | Create .claw/ directory structure with defaults |
+| memory | Runtime | Manage .glaw/memory/ files |
+| init | Direct | Create .glaw/ directory structure with defaults |
 | diff | Direct | Run git diff, display pending changes |
 | version | Direct | Print version string |
 | bughunter | Automation | Activate bug hunting agent mode |
@@ -160,8 +160,8 @@ handle_branch(remainder):
 ```
 handle_worktree(remainder):
   Parse subcommand:
-  - "create NAME": git worktree add .claw/worktrees/NAME
-  - "remove NAME": git worktree remove .claw/worktrees/NAME
+  - "create NAME": git worktree add .glaw/worktrees/NAME
+  - "remove NAME": git worktree remove .glaw/worktrees/NAME
   Default: list worktrees
 ```
 
@@ -175,10 +175,10 @@ handle_worktree(remainder):
 handle_agents():
   Scan directories in order:
   1. .codex/agents/
-  2. .claw/agents/
+  2. .glaw/agents/
   3. $CODEX_HOME/agents/ (env var)
   4. ~/.codex/agents/
-  5. ~/.claw/agents/
+  5. ~/.glaw/agents/
 
   FOR EACH directory:
     FOR EACH .md file:
@@ -195,10 +195,10 @@ handle_agents():
 handle_skills():
   Scan directories (same as agents but for skills/):
   1. .codex/skills/
-  2. .claw/skills/
+  2. .glaw/skills/
   3. $CODEX_HOME/skills/
   4. ~/.codex/skills/
-  5. ~/.claw/skills/
+  5. ~/.glaw/skills/
 
   FOR EACH .md file:
     Parse frontmatter (name, description, trigger conditions)
@@ -213,10 +213,10 @@ handle_skills():
 type DefinitionSource int
 // Priority (highest first):
 // 1. ProjectCodex   (.codex/ in project)
-// 2. ProjectClaw    (.claw/ in project)
+// 2. ProjectGlaw    (.glaw/ in project)
 // 3. UserCodexHome  ($CODEX_HOME)
 // 4. UserCodex      (~/.codex/)
-// 5. UserClaw       (~/.claw/)
+// 5. UserGlaw       (~/.glaw/)
 ```
 
 When two definitions have the same name, the higher-priority source wins.

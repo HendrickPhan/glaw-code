@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -25,7 +24,6 @@ type SSEClient struct {
 	headers    map[string]string
 	httpClient *http.Client
 
-	mu     sync.Mutex
 	nextID int64
 }
 

@@ -44,7 +44,7 @@ func TestE2ECompositeUnknownToolFallsBackToMCP(t *testing.T) {
 
 	ctx := context.Background()
 	mgr := mcp.NewManager()
-	mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
+	_ = mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
 		"test": {Transport: "http", URL: mock.URL()},
 	})
 
@@ -62,7 +62,7 @@ func TestE2ECompositeUnknownToolFallsBackToMCP(t *testing.T) {
 		t.Errorf("Content = %q", out.Content)
 	}
 
-	mgr.Shutdown()
+	_ = mgr.Shutdown()
 }
 
 func TestE2ECompositeMCPFallbackWithToolResult(t *testing.T) {
@@ -82,7 +82,7 @@ func TestE2ECompositeMCPFallbackWithToolResult(t *testing.T) {
 
 	ctx := context.Background()
 	mgr := mcp.NewManager()
-	mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
+	_ = mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
 		"test": {Transport: "http", URL: mock.URL()},
 	})
 
@@ -97,7 +97,7 @@ func TestE2ECompositeMCPFallbackWithToolResult(t *testing.T) {
 		t.Errorf("Content = %q", out.Content)
 	}
 
-	mgr.Shutdown()
+	_ = mgr.Shutdown()
 }
 
 func TestE2ECompositeBuiltinTakesPriority(t *testing.T) {
@@ -114,7 +114,7 @@ func TestE2ECompositeBuiltinTakesPriority(t *testing.T) {
 
 	ctx := context.Background()
 	mgr := mcp.NewManager()
-	mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
+	_ = mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
 		"conflict": {Transport: "http", URL: mock.URL()},
 	})
 
@@ -140,7 +140,7 @@ func TestE2ECompositeBuiltinTakesPriority(t *testing.T) {
 		t.Errorf("Content = %q, should contain 'builtin content'", out.Content)
 	}
 
-	mgr.Shutdown()
+	_ = mgr.Shutdown()
 }
 
 func TestE2ECompositeNilMCPManager(t *testing.T) {
@@ -172,7 +172,7 @@ func TestE2ECompositeNilBuiltin(t *testing.T) {
 
 	ctx := context.Background()
 	mgr := mcp.NewManager()
-	mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
+	_ = mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
 		"test": {Transport: "http", URL: mock.URL()},
 	})
 
@@ -196,7 +196,7 @@ func TestE2ECompositeNilBuiltin(t *testing.T) {
 		t.Error("IsError should be true for unknown tool")
 	}
 
-	mgr.Shutdown()
+	_ = mgr.Shutdown()
 }
 
 func TestE2ECompositeGetToolSpecs(t *testing.T) {
@@ -214,7 +214,7 @@ func TestE2ECompositeGetToolSpecs(t *testing.T) {
 
 	ctx := context.Background()
 	mgr := mcp.NewManager()
-	mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
+	_ = mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
 		"test": {Transport: "http", URL: mock.URL()},
 	})
 
@@ -255,7 +255,7 @@ func TestE2ECompositeGetToolSpecs(t *testing.T) {
 		}
 	}
 
-	mgr.Shutdown()
+	_ = mgr.Shutdown()
 }
 
 func TestE2ECompositeGetToolSpecsWithNilMCP(t *testing.T) {
@@ -284,7 +284,7 @@ func TestE2ECompositeFullWorkflow(t *testing.T) {
 
 	ctx := context.Background()
 	mgr := mcp.NewManager()
-	mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
+	_ = mgr.InitializeAll(ctx, map[string]mcp.ServerConfig{
 		"analyzer": {Transport: "http", URL: mock.URL()},
 	})
 
@@ -319,7 +319,7 @@ func TestE2ECompositeFullWorkflow(t *testing.T) {
 		t.Errorf("Content = %q", analyzeOut.Content)
 	}
 
-	mgr.Shutdown()
+	_ = mgr.Shutdown()
 }
 
 func TestE2ECompositeMCPErrorReturnsBuiltinError(t *testing.T) {

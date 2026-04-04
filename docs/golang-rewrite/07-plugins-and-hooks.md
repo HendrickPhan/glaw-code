@@ -84,7 +84,7 @@ type PluginManager struct {
 }
 
 type PluginManagerConfig struct {
-    ConfigHome     string   // ~/.claw
+    ConfigHome     string   // ~/.glaw
     EnabledPlugins []string // explicit enabled list (empty = all default_enabled)
     ExternalDirs   []string // additional plugin search paths
     InstallRoot    string   // where plugins are installed
@@ -99,7 +99,7 @@ type PluginManagerConfig struct {
 ```
 1. Scan InstallRoot for plugin directories
 2. FOR EACH directory:
-   - Look for plugin.json in root OR .claw-plugin/plugin.json
+   - Look for plugin.json in root OR .glaw-plugin/plugin.json
    - Parse manifest
    - Validate manifest
    - Create PluginDefinition (Bundled or External)
@@ -169,10 +169,10 @@ func (t *PluginTool) Execute(ctx context.Context, input json.RawMessage) (*ToolO
 ```
 1. Build subprocess command (from PluginTool.Command or manifest)
 2. Set environment variables:
-   - CLAW_PLUGIN_ID = {plugin_id}
-   - CLAW_PLUGIN_NAME = {plugin_name}
-   - CLAW_TOOL_NAME = {tool_name}
-   - CLAW_TOOL_INPUT = {input_json}
+   - GLAW_PLUGIN_ID = {plugin_id}
+   - GLAW_PLUGIN_NAME = {plugin_name}
+   - GLAW_TOOL_NAME = {tool_name}
+   - GLAW_TOOL_INPUT = {input_json}
 3. Pipe input JSON to stdin
 4. Capture stdout + stderr
 5. Parse stdout as tool result

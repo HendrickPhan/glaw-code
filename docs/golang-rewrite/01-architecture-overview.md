@@ -2,7 +2,7 @@
 
 ## Project Purpose
 
-Claw Code is a local coding-agent CLI (inspired by Claude Code) that provides:
+Glaw Code is a local coding-agent CLI (inspired by Claude Code) that provides:
 - Interactive REPL and one-shot prompt execution
 - Workspace-aware tools (file ops, bash, search, web)
 - Slash commands for task management
@@ -24,7 +24,7 @@ This document focuses on the Rust implementation as the authoritative source for
 
 | Rust Crate | Responsibility | Suggested Go Package |
 |---|---|---|
-| `claw-cli` | CLI entrypoint, REPL loop, terminal UI | `cmd/claw/` + `internal/cli/` |
+| `glaw-cli` | CLI entrypoint, REPL loop, terminal UI | `cmd/glaw/` + `internal/cli/` |
 | `api` | HTTP API client for LLM providers (Anthropic, xAI/Grok, OpenAI-compat) | `internal/api/` |
 | `runtime` | Conversation runtime, session, config, permissions, bash, file ops, hooks, MCP, OAuth, sandbox | `internal/runtime/` (with sub-packages) |
 | `tools` | 19 built-in tools, tool registry, agent spawning | `internal/tools/` |
@@ -38,7 +38,7 @@ This document focuses on the Rust implementation as the authoritative source for
 ## High-Level Dependency Graph
 
 ```
-cmd/claw (main)
+cmd/glaw (main)
   ├── internal/cli (REPL loop, terminal input, rendering)
   │     ├── internal/runtime (ConversationRuntime)
   │     │     ├── internal/api (ProviderClient → Anthropic/xAI/OpenAI)
@@ -67,7 +67,7 @@ cmd/claw (main)
 
 ## Entry Points
 
-### CLI Entry (`claw-cli/src/main.rs`)
+### CLI Entry (`glaw-cli/src/main.rs`)
 
 ```
 main()
@@ -86,7 +86,7 @@ run_repl_loop()
     read user input (modal line editor)
     IF input starts with '/': dispatch slash command
     ELSE:
-      build system prompt (project context + CLAW.md + tool descriptions)
+      build system prompt (project context + GLAW.md + tool descriptions)
       send to API with streaming
       process SSE response stream
       FOR EACH tool_use block:

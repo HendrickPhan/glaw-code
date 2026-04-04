@@ -32,7 +32,9 @@ func TestLoadFromFile(t *testing.T) {
 		MaxTokens: 8192,
 	}
 	data, _ := json.MarshalIndent(s, "", "  ")
-	os.WriteFile(path, data, 0o644)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile error: %v", err)
+	}
 
 	loaded, err := LoadFromFile(path)
 	if err != nil {
@@ -59,7 +61,9 @@ func TestLoadFromFileNotFound(t *testing.T) {
 func TestLoadFromFileInvalidJSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, SettingsFileName)
-	os.WriteFile(path, []byte("not json"), 0o644)
+	if err := os.WriteFile(path, []byte("not json"), 0o644); err != nil {
+		t.Fatalf("WriteFile error: %v", err)
+	}
 
 	_, err := LoadFromFile(path)
 	if err == nil {
@@ -195,17 +199,25 @@ func TestLoadAllLayering(t *testing.T) {
 
 	// Write global settings
 	globalDir := filepath.Join(home, DefaultGlobalDir)
-	os.MkdirAll(globalDir, 0o755)
+	if err := os.MkdirAll(globalDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll error: %v", err)
+	}
 	global := Settings{Model: "global-model", MaxTokens: 9999}
 	data, _ := json.MarshalIndent(global, "", "  ")
-	os.WriteFile(filepath.Join(globalDir, SettingsFileName), data, 0o644)
+	if err := os.WriteFile(filepath.Join(globalDir, SettingsFileName), data, 0o644); err != nil {
+		t.Fatalf("WriteFile error: %v", err)
+	}
 
 	// Write project settings
 	projectDir := filepath.Join(workspace, ProjectDir)
-	os.MkdirAll(projectDir, 0o755)
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll error: %v", err)
+	}
 	project := Settings{Model: "project-model"}
 	data, _ = json.MarshalIndent(project, "", "  ")
-	os.WriteFile(filepath.Join(projectDir, SettingsFileName), data, 0o644)
+	if err := os.WriteFile(filepath.Join(projectDir, SettingsFileName), data, 0o644); err != nil {
+		t.Fatalf("WriteFile error: %v", err)
+	}
 
 	loaded, err := LoadAll(workspace)
 	if err != nil {
@@ -338,7 +350,9 @@ func TestLoadAllWithEnvBlock(t *testing.T) {
 
 	// Write settings with env block (matches real ~/.glaw/settings.json)
 	globalDir := filepath.Join(home, DefaultGlobalDir)
-	os.MkdirAll(globalDir, 0o755)
+	if err := os.MkdirAll(globalDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll error: %v", err)
+	}
 	settings := Settings{
 		Env: map[string]string{
 			"ANTHROPIC_AUTH_TOKEN": "test-token-123",
@@ -349,7 +363,9 @@ func TestLoadAllWithEnvBlock(t *testing.T) {
 		},
 	}
 	data, _ := json.MarshalIndent(settings, "", "  ")
-	os.WriteFile(filepath.Join(globalDir, SettingsFileName), data, 0o644)
+	if err := os.WriteFile(filepath.Join(globalDir, SettingsFileName), data, 0o644); err != nil {
+		t.Fatalf("WriteFile error: %v", err)
+	}
 
 	loaded, err := LoadAll(workspace)
 	if err != nil {

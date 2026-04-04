@@ -86,7 +86,9 @@ func TestUnloadPlugin(t *testing.T) {
 	writeManifest(t, dir, "p.json", manifest)
 
 	m := NewManager(dir)
-	m.LoadPlugin(filepath.Join(dir, "p.json"))
+	if err := m.LoadPlugin(filepath.Join(dir, "p.json")); err != nil {
+		t.Fatalf("LoadPlugin error: %v", err)
+	}
 
 	if err := m.UnloadPlugin("removeme"); err != nil {
 		t.Fatalf("UnloadPlugin error: %v", err)
@@ -112,7 +114,9 @@ func TestListPlugins(t *testing.T) {
 
 	m := NewManager(dir)
 	for _, name := range []string{"a", "b", "c"} {
-		m.LoadPlugin(filepath.Join(dir, name+".json"))
+		if err := m.LoadPlugin(filepath.Join(dir, name+".json")); err != nil {
+			t.Fatalf("LoadPlugin(%s) error: %v", name, err)
+		}
 	}
 
 	list := m.ListPlugins()
@@ -170,7 +174,9 @@ func TestRunHookWithCommand(t *testing.T) {
 	writeManifest(t, dir, "p.json", manifest)
 
 	m := NewManager(dir)
-	m.LoadPlugin(filepath.Join(dir, "p.json"))
+	if err := m.LoadPlugin(filepath.Join(dir, "p.json")); err != nil {
+		t.Fatalf("LoadPlugin error: %v", err)
+	}
 
 	payload := map[string]string{"tool": "bash"}
 	err := m.RunHook(context.Background(), HookPreTool, payload)
@@ -191,7 +197,9 @@ func TestGetToolDefinitions(t *testing.T) {
 	writeManifest(t, dir, "p.json", manifest)
 
 	m := NewManager(dir)
-	m.LoadPlugin(filepath.Join(dir, "p.json"))
+	if err := m.LoadPlugin(filepath.Join(dir, "p.json")); err != nil {
+		t.Fatalf("LoadPlugin error: %v", err)
+	}
 
 	defs := m.GetToolDefinitions()
 	if len(defs) != 1 {
@@ -214,7 +222,9 @@ func TestGetToolDefinitionsSkipsDisabled(t *testing.T) {
 	writeManifest(t, dir, "p.json", manifest)
 
 	m := NewManager(dir)
-	m.LoadPlugin(filepath.Join(dir, "p.json"))
+	if err := m.LoadPlugin(filepath.Join(dir, "p.json")); err != nil {
+		t.Fatalf("LoadPlugin error: %v", err)
+	}
 
 	// Disable the plugin
 	p, _ := m.GetPlugin("disabled-plugin")

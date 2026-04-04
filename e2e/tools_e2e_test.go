@@ -277,9 +277,15 @@ func TestE2EToolEditFileMissingFile(t *testing.T) {
 
 func TestE2EToolGlobSearch(t *testing.T) {
 	reg, dir := newTestRegistry(t)
-	os.WriteFile(filepath.Join(dir, "a.go"), []byte("pkg main"), 0o644)
-	os.WriteFile(filepath.Join(dir, "b.go"), []byte("pkg main"), 0o644)
-	os.WriteFile(filepath.Join(dir, "c.txt"), []byte("text"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("pkg main"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "b.go"), []byte("pkg main"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "c.txt"), []byte("text"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 
 	out := execTool(t, reg, "glob_search", map[string]string{"pattern": "*.go"})
 	if out.IsError {
@@ -308,8 +314,12 @@ func TestE2EToolGlobSearchNoMatch(t *testing.T) {
 
 func TestE2EToolGrepSearch(t *testing.T) {
 	reg, dir := newTestRegistry(t)
-	os.WriteFile(filepath.Join(dir, "hello.go"), []byte("func hello() {}\nfunc world() {}\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, "other.go"), []byte("func other() {}\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "hello.go"), []byte("func hello() {}\nfunc world() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "other.go"), []byte("func other() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out := execTool(t, reg, "grep_search", map[string]string{"pattern": "func hello"})
 	if out.IsError {
@@ -323,8 +333,12 @@ func TestE2EToolGrepSearch(t *testing.T) {
 func TestE2EToolGrepSearchInSubdirectory(t *testing.T) {
 	reg, dir := newTestRegistry(t)
 	sub := filepath.Join(dir, "sub")
-	os.MkdirAll(sub, 0o755)
-	os.WriteFile(filepath.Join(sub, "target.go"), []byte("target_string here\n"), 0o644)
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(sub, "target.go"), []byte("target_string here\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 
 	out := execTool(t, reg, "grep_search", map[string]string{"pattern": "target_string", "path": "sub"})
 	if out.IsError {
@@ -361,7 +375,7 @@ func TestE2EToolGrepNoMatch(t *testing.T) {
 
 func TestE2EToolWebFetch(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("Hello from mock server"))
+		_, _ = w.Write([]byte("Hello from mock server"))
 	}))
 	defer ts.Close()
 

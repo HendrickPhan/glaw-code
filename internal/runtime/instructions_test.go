@@ -31,7 +31,9 @@ func TestLoadInstructionFiles(t *testing.T) {
 	}
 
 	// Create .glaw/GLAW.md
-	os.MkdirAll(filepath.Join(tmpDir, ".glaw"), 0o755)
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".glaw"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 	glawLocal := "# Local Rules\nUse tabs for indentation."
 	if err := os.WriteFile(filepath.Join(tmpDir, ".glaw", "GLAW.md"), []byte(glawLocal), 0o644); err != nil {
 		t.Fatal(err)
@@ -46,7 +48,9 @@ func TestLoadInstructionFiles(t *testing.T) {
 	}
 
 	// Create .glaw/instructions/test-rules.md
-	os.MkdirAll(filepath.Join(tmpDir, ".glaw", "instructions"), 0o755)
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".glaw", "instructions"), 0o755); err != nil {
+		t.Fatalf("MkdirAll instructions: %v", err)
+	}
 	instrContent := "# Test Rules\nRun tests before committing."
 	if err := os.WriteFile(filepath.Join(tmpDir, ".glaw", "instructions", "test-rules.md"), []byte(instrContent), 0o644); err != nil {
 		t.Fatal(err)

@@ -17,7 +17,7 @@ type ProviderClient interface {
 ```
 
 **Provider variants:**
-- `ClawApiClient` — Anthropic API (`POST /v1/messages`)
+- `GlawApiClient` — Anthropic API (`POST /v1/messages`)
 - `XaiClient` — xAI/Grok API (`POST /chat/completions`, OpenAI-compatible)
 - `OpenAICompatClient` — Generic OpenAI-compatible endpoint
 
@@ -34,17 +34,17 @@ IF model starts with "grok":
 ELSE:
     require ANTHROPIC_API_KEY env var (or proxy token)
     read ANTHROPIC_BASE_URL env var (default: "https://api.anthropic.com")
-    return ClawApiClient
+    return GlawApiClient
 ```
 
 ### Auth Sources
 - `ApiKey` — explicit key passed at construction
 - `EnvVar` — read from environment variable
-- `ProxyToken` — from `~/.claw/credentials` OAuth token
+- `ProxyToken` — from `~/.glaw/credentials` OAuth token
 
 ---
 
-## ClawApiClient — Anthropic API
+## GlawApiClient — Anthropic API
 
 ### SendMessage (non-streaming)
 

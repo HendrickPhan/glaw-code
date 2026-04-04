@@ -169,7 +169,9 @@ func (s *Store) load() {
 		s.tasks[t.ID] = t
 		// Track max seq
 		var n int64
-		fmt.Sscanf(t.ID, "%d", &n)
+		if _, err := fmt.Sscanf(t.ID, "%d", &n); err != nil {
+			continue
+		}
 		for {
 			cur := s.seq.Load()
 			if n <= cur || s.seq.CompareAndSwap(cur, n) {
@@ -188,7 +190,11 @@ func (s *Store) save() {
 		list = append(list, t)
 	}
 	dir := filepath.Dir(s.filePath)
-	os.MkdirAll(dir, 0o755)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
 	data, _ := json.MarshalIndent(list, "", "  ")
-	os.WriteFile(s.filePath, data, 0o644)
+	if err := os.WriteFile(s.filePath, data, 0o644); err != nil {
+		return
+	}
 }

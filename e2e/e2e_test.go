@@ -35,7 +35,9 @@ func TestE2EServerSessionLifecycle(t *testing.T) {
 	}
 
 	var createResp server.CreateSessionResponse
-	json.NewDecoder(resp.Body).Decode(&createResp)
+	if err := json.NewDecoder(resp.Body).Decode(&createResp); err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
 	if createResp.SessionID == "" {
 		t.Fatal("empty session ID")
 	}
@@ -49,7 +51,9 @@ func TestE2EServerSessionLifecycle(t *testing.T) {
 	defer resp.Body.Close()
 
 	var listResp server.ListSessionsResponse
-	json.NewDecoder(resp.Body).Decode(&listResp)
+	if err := json.NewDecoder(resp.Body).Decode(&listResp); err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
 	if len(listResp.Sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(listResp.Sessions))
 	}
@@ -62,7 +66,9 @@ func TestE2EServerSessionLifecycle(t *testing.T) {
 	defer resp.Body.Close()
 
 	var details server.SessionDetailsResponse
-	json.NewDecoder(resp.Body).Decode(&details)
+	if err := json.NewDecoder(resp.Body).Decode(&details); err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
 	if details.ID != createResp.SessionID {
 		t.Errorf("session ID mismatch: %q != %q", details.ID, createResp.SessionID)
 	}
@@ -87,7 +93,9 @@ func TestE2EServerSessionLifecycle(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	json.NewDecoder(resp.Body).Decode(&details)
+	if err := json.NewDecoder(resp.Body).Decode(&details); err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
 	if details.Session == nil {
 		t.Fatal("session should not be nil")
 	}
@@ -105,7 +113,9 @@ func TestE2ESSEStream(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 	var createResp server.CreateSessionResponse
-	json.NewDecoder(resp.Body).Decode(&createResp)
+	if err := json.NewDecoder(resp.Body).Decode(&createResp); err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
 	resp.Body.Close()
 
 	// Connect to SSE stream with timeout
@@ -153,7 +163,9 @@ func TestE2EMultipleSessions(t *testing.T) {
 			t.Fatalf("create session %d: %v", i, err)
 		}
 		var createResp server.CreateSessionResponse
-		json.NewDecoder(resp.Body).Decode(&createResp)
+		if err := json.NewDecoder(resp.Body).Decode(&createResp); err != nil {
+				t.Fatalf("decode session %d: %v", i, err)
+			}
 		resp.Body.Close()
 		ids[createResp.SessionID] = true
 	}
@@ -164,7 +176,9 @@ func TestE2EMultipleSessions(t *testing.T) {
 		t.Fatalf("list sessions: %v", err)
 	}
 	var listResp server.ListSessionsResponse
-	json.NewDecoder(resp.Body).Decode(&listResp)
+	if err := json.NewDecoder(resp.Body).Decode(&listResp); err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
 	resp.Body.Close()
 
 	if len(listResp.Sessions) != 5 {
@@ -233,7 +247,9 @@ func TestE2EAPIRequest(t *testing.T) {
 	}
 
 	var parsed map[string]interface{}
-	json.Unmarshal(data, &parsed)
+	if err := json.Unmarshal(data, &parsed); err != nil {
+			t.Fatalf("Unmarshal: %v", err)
+		}
 
 	if parsed["model"] != "claude-sonnet-4-6" {
 		t.Errorf("model = %v", parsed["model"])
@@ -258,7 +274,7 @@ func TestE2EAPIRequest(t *testing.T) {
 
 // SSEScanner is a helper for reading SSE events in tests.
 type SSEScanner struct {
-	scanner interface {
+	_ interface {
 		Scan() bool
 		Text() string
 	}
@@ -363,7 +379,7 @@ func TestE2EAPIRoundTrip(t *testing.T) {
 		}
 		w.Header().Set("x-request-id", "req_e2e_456")
 		w.WriteHeader(http.StatusOK)
-		w.Write(body)
+		_, _ = w.Write(body)
 	}))
 	defer mockServer.Close()
 

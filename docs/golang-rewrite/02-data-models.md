@@ -102,7 +102,7 @@ type Session struct {
 }
 ```
 
-**Persistence:** Saved as JSON to `.claw/sessions/{session-id}.json`. Load/save functions read/write the file directly.
+**Persistence:** Saved as JSON to `.glaw/sessions/{session-id}.json`. Load/save functions read/write the file directly.
 
 **Compaction:** When message count exceeds threshold, old messages are summarized via an API call and replaced with a single summary message. Recent N messages are preserved.
 
@@ -133,10 +133,10 @@ type ConfigSource string // "user" | "project" | "local"
 ```
 
 ### Config Loading Order
-1. `~/.claw/config.toml` (user-level)
-2. `.claw/config.toml` (project-level)
-3. `.claw.json` (project-level, JSON format)
-4. Environment variable overrides (CLAW_*, ANTHROPIC_*)
+1. `~/.glaw/config.toml` (user-level)
+2. `.glaw/config.toml` (project-level)
+3. `.glaw.json` (project-level, JSON format)
+4. Environment variable overrides (GLAW_*, ANTHROPIC_*)
 
 Deep merge: later sources override earlier ones. Maps are merged, scalars are replaced.
 
@@ -260,7 +260,7 @@ type SlashCommandCategory string
 | 8 | resume | Session | Resume previous session |
 | 9 | config | Core | Read/write configuration |
 | 10 | memory | Core | Manage memory/context |
-| 11 | init | Workspace | Initialize .claw directory |
+| 11 | init | Workspace | Initialize .glaw directory |
 | 12 | diff | Workspace | Show pending file changes |
 | 13 | version | Core | Show version |
 | 14 | bughunter | Automation | Bug hunting mode |

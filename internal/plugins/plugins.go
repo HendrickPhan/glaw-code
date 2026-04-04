@@ -183,12 +183,7 @@ func (m *Manager) GetToolDefinitions() []ToolDefinition {
 			continue
 		}
 		for _, tc := range p.Manifest.Tools {
-			defs = append(defs, ToolDefinition{
-				Name:        tc.Name,
-				Description: tc.Description,
-				InputSchema: tc.InputSchema,
-				Command:     tc.Command,
-			})
+			defs = append(defs, ToolDefinition(tc))
 		}
 	}
 	return defs

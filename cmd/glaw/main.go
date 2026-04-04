@@ -26,7 +26,10 @@ func main() {
 		serveOpen := serveCmd.Bool("open", true, "Open browser automatically")
 		serveModel := serveCmd.String("model", "", "Model to use")
 		serveConfigPath := serveCmd.String("config", "", "Path to config file")
-		serveCmd.Parse(os.Args[2:])
+		if err := serveCmd.Parse(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing serve flags: %v\n", err)
+			os.Exit(1)
+		}
 
 		workspaceRoot, _ := os.Getwd()
 		settings, err := config.LoadAll(workspaceRoot)
@@ -57,7 +60,9 @@ func main() {
 		mcpManager := mcp.NewManager()
 		mcpConfigs := convertMCPConfigs(settings.MCPServers)
 		ctx := context.Background()
-		mcpManager.InitializeAll(ctx, mcpConfigs)
+		if err := mcpManager.InitializeAll(ctx, mcpConfigs); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: initializing MCP servers: %v\n", err)
+		}
 
 		runtimeFactory := func(sess *runtime.Session) (*runtime.ConversationRuntime, func(), error) {
 			toolRegistry := tools.NewRegistry(workspaceRoot)
@@ -171,7 +176,9 @@ func main() {
 	// Initialize MCP manager
 	mcpManager := mcp.NewManager()
 	mcpConfigs := convertMCPConfigs(settings.MCPServers)
-	mcpManager.InitializeAll(ctx, mcpConfigs)
+	if err := mcpManager.InitializeAll(ctx, mcpConfigs); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: initializing MCP servers: %v\n", err)
+	}
 
 	// Create tool executor (builtin tools + MCP)
 	toolRegistry := tools.NewRegistry(workspaceRoot)
@@ -187,7 +194,7 @@ func main() {
 	go func() {
 		<-sigChan
 		fmt.Println("\nInterrupted. Saving session...")
-		mcpManager.Shutdown()
+		_ = mcpManager.Shutdown()
 		if path, err := runtime.SaveSession(session, filepath.Join(workspaceRoot, ".glaw", "sessions")); err == nil {
 			fmt.Printf("Session saved to %s\n", path)
 		}

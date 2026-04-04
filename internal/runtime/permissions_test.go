@@ -405,7 +405,9 @@ func TestWriteFilePathValidationIntegration(t *testing.T) {
 	tmpDir := t.TempDir()
 	// Create a subdirectory to ensure proper resolution.
 	subDir := filepath.Join(tmpDir, "project")
-	os.MkdirAll(subDir, 0o755)
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 
 	insidePath := filepath.Join(subDir, "file.txt")
 	outsidePath := filepath.Join(tmpDir, "outside.txt")

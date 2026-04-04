@@ -207,15 +207,6 @@ func (r *Registry) resolvePath(p string) (string, error) {
 	return abs, nil
 }
 
-// isWithinWorkspace checks if a path is within the workspace root.
-func (r *Registry) isWithinWorkspace(p string) bool {
-	rel, err := filepath.Rel(r.workspaceRoot, p)
-	if err != nil {
-		return false
-	}
-	return !strings.HasPrefix(rel, "..") && rel != ".."
-}
-
 // --- Tool implementations ---
 
 func (r *Registry) bashTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
@@ -426,7 +417,7 @@ func (r *Registry) grepSearchTool(ctx context.Context, input json.RawMessage) (*
 		}
 		results = matches
 	} else {
-		filepath.WalkDir(searchPath, func(path string, d os.DirEntry, walkErr error) error {
+		_ = filepath.WalkDir(searchPath, func(path string, d os.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return nil
 			}

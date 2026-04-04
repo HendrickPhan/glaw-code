@@ -20,7 +20,7 @@ func ReadLineWithCompletion(prompt string) (string, error) {
 		_, err := fmt.Fscanln(os.Stdin, &line)
 		return line, err
 	}
-	defer term.Restore(int(os.Stdin.Fd()), oldState)
+	defer func() { _ = term.Restore(int(os.Stdin.Fd()), oldState) }()
 
 	buf := make([]byte, 1)
 	var line strings.Builder

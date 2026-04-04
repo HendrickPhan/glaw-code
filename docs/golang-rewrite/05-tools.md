@@ -279,7 +279,7 @@ type ToolOutput struct {
 ```
 1. Parse todo list from input
 2. Validate each todo has id, subject, status
-3. Write todo list to .claw/todos.json (or in-memory)
+3. Write todo list to .glaw/todos.json (or in-memory)
 4. Return formatted todo list summary
 ```
 
@@ -300,7 +300,7 @@ type ToolOutput struct {
 **Execution Logic:**
 ```
 1. Look up skill by name in skill registry
-2. Load skill definition from .claw/skills/{name}.md (or bundled)
+2. Load skill definition from .glaw/skills/{name}.md (or bundled)
 3. Execute skill logic (varies by skill)
 4. Return skill output
 ```

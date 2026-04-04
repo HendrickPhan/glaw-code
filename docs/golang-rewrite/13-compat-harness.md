@@ -31,7 +31,7 @@ func FromWorkspaceDir(dir string) *UpstreamPaths
    a. "claw-code" directory in ancestors
    b. "reference-source" directory in ancestors
    c. "vendor" subdirectory containing upstream source
-2. Check CLAW_CODE_UPSTREAM env var
+2. Check GLAW_CODE_UPSTREAM env var
 3. Return UpstreamPaths with resolved RepoRoot
 ```
 

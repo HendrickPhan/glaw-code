@@ -78,7 +78,7 @@ func chdir(t *testing.T, dir string) {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("chdir: %v", err)
 	}
-	t.Cleanup(func() { os.Chdir(orig) })
+	t.Cleanup(func() { _ = os.Chdir(orig) })
 }
 
 // --- Core Commands ---
@@ -268,7 +268,7 @@ func TestE2ECmdInitCreatesDirectory(t *testing.T) {
 
 func TestE2ECmdMemoryWorkflow(t *testing.T) {
 	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, ".glaw", "memory"), 0o755)
+	if err := os.MkdirAll(filepath.Join(dir, ".glaw", "memory"), 0o755); err != nil { t.Fatal(err) }
 	chdir(t, dir)
 
 	d := commands.NewDispatcher(newMockRuntimeFS(dir))
@@ -306,7 +306,7 @@ func TestE2ECmdMemoryWorkflow(t *testing.T) {
 
 func TestE2ECmdMemoryListEmpty(t *testing.T) {
 	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, ".glaw", "memory"), 0o755)
+	if err := os.MkdirAll(filepath.Join(dir, ".glaw", "memory"), 0o755); err != nil { t.Fatal(err) }
 	chdir(t, dir)
 
 	d := commands.NewDispatcher(newMockRuntimeFS(dir))
@@ -330,8 +330,8 @@ func TestE2ECmdMemoryNoDir(t *testing.T) {
 func TestE2ECmdSessionWorkflow(t *testing.T) {
 	dir := t.TempDir()
 	sessionsDir := filepath.Join(dir, ".glaw", "sessions")
-	os.MkdirAll(sessionsDir, 0o755)
-	os.WriteFile(filepath.Join(sessionsDir, "sess_test.json"), []byte(`{"id":"sess_test"}`), 0o644)
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(filepath.Join(sessionsDir, "sess_test.json"), []byte(`{"id":"sess_test"}`), 0o644); err != nil { t.Fatal(err) }
 	chdir(t, dir)
 
 	d := commands.NewDispatcher(newMockRuntimeFS(dir))
@@ -542,11 +542,13 @@ func TestE2ECmdTeleportWithArg(t *testing.T) {
 func TestE2ECmdResumeListSessions(t *testing.T) {
 	dir := t.TempDir()
 	sessionsDir := filepath.Join(dir, ".glaw", "sessions")
-	os.MkdirAll(sessionsDir, 0o755)
-	os.WriteFile(filepath.Join(sessionsDir, "abc123.json"), []byte(`{}`), 0o644)
-	chdir(t, dir)
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(filepath.Join(sessionsDir, "abc123.json"), []byte(`{}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		chdir(t, dir)
 
-	d := commands.NewDispatcher(newMockRuntimeFS(dir))
+		d := commands.NewDispatcher(newMockRuntimeFS(dir))
 	result := handleCmd(t, d, "/resume")
 	if !strings.Contains(result.Message, "abc123") {
 		t.Errorf("resume list: %q", result.Message)
@@ -605,7 +607,9 @@ func TestE2ECmdPluginInstallWithManifest(t *testing.T) {
 
 	// Create a manifest file
 	manifestPath := filepath.Join(dir, "manifest.json")
-	os.WriteFile(manifestPath, []byte(`{"name":"test-plugin","version":"1.0.0"}`), 0o644)
+	if err := os.WriteFile(manifestPath, []byte(`{"name":"test-plugin","version":"1.0.0"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
 
 	d := commands.NewDispatcher(newMockRuntimeFS(dir))
 	result := handleCmd(t, d, "/plugin install "+manifestPath)

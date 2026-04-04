@@ -1,6 +1,6 @@
 # CLI, REPL, and Terminal UI
 
-## Package: `cmd/claw/` + `internal/cli/`
+## Package: `cmd/glaw/` + `internal/cli/`
 
 ---
 
