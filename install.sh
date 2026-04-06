@@ -6,9 +6,11 @@
 #   curl -fsSL https://raw.githubusercontent.com/HendrickPhan/glaw-code/main/install.sh | bash
 #   or
 #   git clone git@github.com:HendrickPhan/glaw-code.git && cd glaw-code && bash install.sh
+#   bash install.sh --local     # Force using local prebuild/ directory
 #
-# This script downloads a prebuilt binary from GitHub Releases — no Go or
-# Node.js toolchain is required on the user's machine.
+# This script installs a prebuilt binary — either from the local prebuild/
+# directory (when run from a cloned repo) or by downloading from GitHub
+# Releases (when piped via curl).
 #
 set -euo pipefail
 
@@ -76,8 +78,6 @@ binary_filename() {
 get_latest_version() {
   local api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
 
-  # Try to fetch the latest release tag.
-  # Use a subshell to avoid pipefail killing the script on 404.
   RELEASE_VERSION=""
   local response
   response=$(curl -fsSL "$api_url" 2>/dev/null || true)
@@ -86,7 +86,6 @@ get_latest_version() {
   fi
 
   if [ -z "${RELEASE_VERSION:-}" ]; then
-    # No release found — will fall back to local prebuild/ directory
     warn "No GitHub release found. Will try local prebuild/ directory."
   else
     info "Latest release: ${RELEASE_VERSION}"
@@ -94,7 +93,20 @@ get_latest_version() {
 }
 
 # -------------------------------------------------------
-# Download the prebuilt binary
+# Check if local prebuild/ directory is available
+# -------------------------------------------------------
+has_local_prebuild() {
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local filename
+  filename="$(binary_filename)"
+  local prebuild_path="${script_dir}/prebuild/${filename}"
+
+  [ -f "$prebuild_path" ]
+}
+
+# -------------------------------------------------------
+# Download or copy the prebuilt binary
 # -------------------------------------------------------
 download_binary() {
   local filename
@@ -102,7 +114,33 @@ download_binary() {
   DOWNLOAD_DIR="${TMPDIR_BASE}/glaw-code-install-$$"
   mkdir -p "$DOWNLOAD_DIR"
 
-  if [ -n "$RELEASE_VERSION" ]; then
+  # ── Strategy: local prebuild first, then GitHub Release ──
+  #
+  # When install.sh is run from a cloned repo (bash install.sh),
+  # we prefer the local prebuild/ directory because:
+  #   1. The developer just built it — it's the freshest binary.
+  #   2. Avoids downloading from GitHub, which may have an older release.
+  #   3. Works offline.
+  #
+  # When piped via curl, there's no local prebuild/, so we download
+  # from GitHub Releases.
+
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local prebuild_path="${script_dir}/prebuild/${filename}"
+
+  if [ "${FORCE_LOCAL:-}" = "1" ] || [ -f "$prebuild_path" ]; then
+    # ── Use local prebuild/ directory ────────────────────
+    if [ -f "$prebuild_path" ]; then
+      info "Installing from local prebuild/${filename}..."
+      cp "$prebuild_path" "${DOWNLOAD_DIR}/${BINARY_NAME}"
+      ok "Copied from ${prebuild_path}"
+    else
+      err "No local prebuilt binary found at prebuild/${filename}"
+      err "Run 'bash build.sh' first to create it."
+      exit 1
+    fi
+  elif [ -n "${RELEASE_VERSION:-}" ]; then
     # ── Download from GitHub Release ──────────────────────
     local download_url="https://github.com/${GITHUB_REPO}/releases/download/${RELEASE_VERSION}/${filename}"
     info "Downloading ${filename} from ${download_url}..."
@@ -116,26 +154,14 @@ download_binary() {
       exit 1
     fi
   else
-    # ── Fallback: copy from local prebuild/ directory ─────
-    # This is useful when running install.sh from a cloned repo
-    # and no GitHub Release has been published yet.
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local prebuild_path="${script_dir}/prebuild/${filename}"
-
-    if [ -f "$prebuild_path" ]; then
-      info "Installing from local prebuild/${filename}..."
-      cp "$prebuild_path" "${DOWNLOAD_DIR}/${BINARY_NAME}"
-      ok "Copied from ${prebuild_path}"
-    else
-      err "No prebuilt binary found for your platform."
-      err "Expected one of:"
-      err "  - GitHub Release: https://github.com/${GITHUB_REPO}/releases"
-      err "  - Local file:     prebuild/${filename}"
-      err ""
-      err "To create a prebuilt binary, run:  bash build.sh"
-      exit 1
-    fi
+    # ── No binary available anywhere ──────────────────────
+    err "No prebuilt binary found for your platform."
+    err "Expected one of:"
+    err "  - Local file:     prebuild/${filename}"
+    err "  - GitHub Release: https://github.com/${GITHUB_REPO}/releases"
+    err ""
+    err "To create a prebuilt binary, run:  bash build.sh"
+    exit 1
   fi
 
   chmod +x "${DOWNLOAD_DIR}/${BINARY_NAME}"
@@ -162,14 +188,18 @@ install_glaw() {
     return
   fi
 
-  # Try direct copy first
+  # Remove old binary first (needed on macOS when overwriting with sudo)
   local dest="${INSTALL_DIR}/${BINARY_NAME}"
-  if cp "$src" "$dest" 2>/dev/null; then
+
+  if [ -w "${INSTALL_DIR}" ] && [ ! -f "$dest" -o -w "$dest" ]; then
+    # Direct copy (user has write permission)
+    cp "$src" "$dest"
     chmod +x "$dest"
     ok "Installed to ${dest}"
   elif [ "$(id -u)" -ne 0 ]; then
     # Need sudo
     info "Requesting sudo to install to ${dest}..."
+    sudo rm -f "$dest"
     sudo cp "$src" "$dest"
     sudo chmod +x "$dest"
     ok "Installed to ${dest}"
@@ -217,6 +247,14 @@ trap cleanup EXIT
 main() {
   echo -e "${BOLD}glaw-code installer${RESET}"
   echo ""
+
+  # Parse flags
+  case "${1:-}" in
+    --local|-l)
+      FORCE_LOCAL=1
+      info "Forcing local prebuild/ directory"
+      ;;
+  esac
 
   detect_platform
   get_latest_version

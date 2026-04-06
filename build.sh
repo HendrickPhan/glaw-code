@@ -7,6 +7,9 @@ set -e
 # Outputs binaries into the prebuild/ directory using the
 # naming convention:  glaw-{os}-{arch}[.exe]
 #
+# Also creates a ./glaw binary for the current platform in
+# the project root for quick local testing.
+#
 # Usage:
 #   bash build.sh           # build all platforms
 #   bash build.sh darwin    # build only for macOS (darwin)
@@ -14,9 +17,14 @@ set -e
 # ─────────────────────────────────────────────────────────
 
 BINARY_NAME="glaw"
-PREBUILD_DIR="$(cd "$(dirname "$0")" && pwd)/prebuild"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PREBUILD_DIR="${SCRIPT_DIR}/prebuild"
 MAIN_PACKAGE="./cmd/glaw"
-LDFLAGS="-s -w"
+
+# ── Version injection ──────────────────────────────────
+# Use git describe if available, otherwise fall back to "dev"
+VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo "dev")"
+LDFLAGS="-s -w -X main.Version=${VERSION}"
 
 # Colors
 GREEN='\033[0;32m'
@@ -97,10 +105,34 @@ build_binary() {
 }
 
 # -------------------------------------------------------
+# Build root binary for the current platform (convenience)
+# -------------------------------------------------------
+build_root_binary() {
+    local goos
+    local goarch
+    goos="$(current_os)"
+    goarch="$(current_arch)"
+
+    local root_binary="${SCRIPT_DIR}/${BINARY_NAME}"
+    if [ "$goos" = "windows" ]; then
+        root_binary="${root_binary}.exe"
+    fi
+
+    info "Building root ./${BINARY_NAME} for current platform (${goos}/${goarch})..."
+    CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+        go build -ldflags "$LDFLAGS" -o "$root_binary" "$MAIN_PACKAGE"
+
+    local size
+    size=$(du -h "$root_binary" | cut -f1)
+    ok "./${BINARY_NAME} (${size})  [version: ${VERSION}]"
+}
+
+# -------------------------------------------------------
 # Main
 # -------------------------------------------------------
 main() {
     echo -e "${BOLD}glaw-code builder${RESET}"
+    info "Version: ${VERSION}"
     echo ""
 
     # Ensure prebuild directory exists
@@ -143,7 +175,13 @@ main() {
     fi
 
     echo ""
+
+    # Also build the root binary for quick local testing
+    build_root_binary
+
+    echo ""
     ok "All binaries written to prebuild/"
+    ok "Root binary: ./${BINARY_NAME}"
     ls -lh "${PREBUILD_DIR}/"
 }
 
