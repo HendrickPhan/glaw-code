@@ -51,7 +51,10 @@ jobs:
         run: go mod verify
 
       - name: Build
-        run: CGO_ENABLED=0 go build -ldflags="-s -w" -o glaw ./cmd/glaw/
+        run: |
+          VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo "ci-build")"
+          CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=${VERSION}" -o glaw ./cmd/glaw/
+          ./glaw --version
 
       - name: Run tests
         run: go test -race -count=1 ./...

@@ -24,8 +24,8 @@ func ReadLineWithCompletion(prompt string) (string, error) {
 
 	buf := make([]byte, 1)
 	var line strings.Builder
-	var suggestions []commands.Spec
 	selectedIdx := 0
+	completionLineCount := 0
 
 	// Print prompt
 	fmt.Print(prompt)
@@ -43,12 +43,18 @@ func ReadLineWithCompletion(prompt string) (string, error) {
 
 		switch {
 		case b == 3: // Ctrl+C
-			clearCompletion(len(suggestions))
+			if completionLineCount > 0 {
+				eraseCompletion(completionLineCount)
+				completionLineCount = 0
+			}
 			fmt.Print("\r\n")
 			return "", fmt.Errorf("interrupted")
 
 		case b == 13 || b == 10: // Enter
-			clearCompletion(len(suggestions))
+			if completionLineCount > 0 {
+				eraseCompletion(completionLineCount)
+				completionLineCount = 0
+			}
 			fmt.Print("\r\n")
 			return line.String(), nil
 
@@ -60,59 +66,55 @@ func ReadLineWithCompletion(prompt string) (string, error) {
 				runes = runes[:len(runes)-1]
 				line.Reset()
 				line.WriteString(string(runes))
-				// Redraw
-				clearCompletion(len(suggestions))
-				suggestions = nil
+				if completionLineCount > 0 {
+					eraseCompletion(completionLineCount)
+					completionLineCount = 0
+				}
 				redrawLine(prompt, line.String())
-				// Re-trigger completion if still starts with /
 				if strings.HasPrefix(line.String(), "/") && !strings.Contains(line.String()[1:], " ") {
-					suggestions = matchCommands(line.String())
+					matches := matchCommands(line.String())
 					selectedIdx = 0
-					if len(suggestions) > 0 {
-						showCompletion(suggestions, selectedIdx)
-					}
+					completionLineCount = showCompletion(matches, selectedIdx)
 				}
 			}
 
 		case b == 9: // Tab
-			if len(suggestions) > 0 {
-				clearCompletion(len(suggestions))
-				// If multiple suggestions, cycle through them
-				if len(suggestions) > 1 {
-					selectedIdx = (selectedIdx + 1) % len(suggestions)
-					line.Reset()
-					line.WriteString("/" + suggestions[selectedIdx].Name)
-				} else {
-					// Single match - complete it
-					line.Reset()
-					line.WriteString("/" + suggestions[0].Name)
-				}
-				redrawLine(prompt, line.String())
-				// Re-show suggestions for multiple matches
-				if len(suggestions) > 1 {
-					showCompletion(suggestions, selectedIdx)
-				} else {
-					suggestions = nil
+			if completionLineCount > 0 {
+				matches := matchCommands(line.String())
+				if len(matches) > 0 {
+					eraseCompletion(completionLineCount)
+					completionLineCount = 0
+					if len(matches) > 1 {
+						selectedIdx = (selectedIdx + 1) % len(matches)
+						line.Reset()
+						line.WriteString("/" + matches[selectedIdx].Name)
+					} else {
+						line.Reset()
+						line.WriteString("/" + matches[0].Name)
+					}
+					redrawLine(prompt, line.String())
+					if len(matches) > 1 {
+						completionLineCount = showCompletion(matches, selectedIdx)
+					}
 				}
 			}
 
 		default:
 			// Printable character
 			if b >= 32 && b < 127 {
-				clearCompletion(len(suggestions))
-				suggestions = nil
+				if completionLineCount > 0 {
+					eraseCompletion(completionLineCount)
+					completionLineCount = 0
+				}
 
 				line.WriteByte(b)
-				fmt.Print(string(b))
+				redrawLine(prompt, line.String())
 
-				// Show completions when typing a slash command
 				current := line.String()
 				if strings.HasPrefix(current, "/") && !strings.Contains(current[1:], " ") {
-					suggestions = matchCommands(current)
+					matches := matchCommands(current)
 					selectedIdx = 0
-					if len(suggestions) > 0 {
-						showCompletion(suggestions, selectedIdx)
-					}
+					completionLineCount = showCompletion(matches, selectedIdx)
 				}
 			}
 		}
@@ -120,6 +122,7 @@ func ReadLineWithCompletion(prompt string) (string, error) {
 }
 
 // redrawLine clears the current line and redraws prompt + content.
+// After calling this the cursor is positioned after the content.
 func redrawLine(prompt, content string) {
 	fmt.Print("\r\033[K" + prompt + content)
 }
@@ -147,9 +150,17 @@ func matchCommands(input string) []commands.Spec {
 	return matches
 }
 
-// showCompletion renders the autocomplete suggestions below the current line.
-func showCompletion(specs []commands.Spec, selected int) {
-	fmt.Print("\r\n")
+// showCompletion renders autocomplete suggestions below the current input line.
+// The cursor must be at the end of the input line when calling this.
+// After drawing, the cursor is returned to the end of the input line.
+// Returns the number of lines printed below the input line.
+func showCompletion(specs []commands.Spec, selected int) int {
+	if len(specs) == 0 {
+		return 0
+	}
+
+	// Build all the lines first so we know exactly how many we print.
+	var lines []string
 	for i, spec := range specs {
 		style := Dim
 		if i == selected {
@@ -167,14 +178,43 @@ func showCompletion(specs []commands.Spec, selected int) {
 		if i == selected {
 			icon = "> "
 		}
-		fmt.Printf("%s%s/%s%s - %s%s\r\n", icon, style, spec.Name, hint+aliases, spec.Summary, Reset)
+		lines = append(lines, fmt.Sprintf("%s%s/%s%s - %s%s", icon, style, spec.Name, hint+aliases, spec.Summary, Reset))
 	}
+
+	// Cursor is at end of input line. Move down and print each suggestion.
+	for _, l := range lines {
+		fmt.Print("\r\n" + l)
+	}
+	totalLines := len(lines)
+
+	// Move cursor back up to the input line.
+	fmt.Printf("\033[%dA", totalLines)
+
+	// Now cursor is at column 0 of the input line.
+	// We need it at the end of the prompt+content so the next typed
+	// character appears in the right place. Move right by a large number —
+	// the terminal clamps it to the actual end of line content.
+	fmt.Print("\033[999C")
+
+	return totalLines
 }
 
-// clearCompletion erases the completion suggestions from the terminal.
-func clearCompletion(count int) {
-	if count == 0 {
+// eraseCompletion erases completion suggestions that were drawn below the input line.
+// The cursor must be at the end of the input line when calling this.
+// After erasing, the cursor is at the start of the line (column 0) so the caller
+// should call redrawLine to repaint the input.
+func eraseCompletion(lineCount int) {
+	if lineCount == 0 {
 		return
 	}
-	EraseLines(count)
+	// Move cursor down to the last suggestion line
+	fmt.Printf("\033[%dB", lineCount)
+	// Erase all lines moving back up to (and including) the first suggestion line
+	for i := 0; i < lineCount; i++ {
+		ClearLine()
+		MoveUp(1)
+	}
+	// One final clear for the line we landed on
+	ClearLine()
+	// Cursor is now at column 0 of the input line
 }

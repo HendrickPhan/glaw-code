@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build & Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Build web UI
+        working-directory: web
+        run: npm run build
+
+      - name: Copy static files
+        run: |
+          rm -rf internal/web/static
+          cp -r web/out internal/web/static
+
+      - name: Determine version
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Build all platforms
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          LDFLAGS="-s -w -X main.Version=${VERSION}"
+
+          mkdir -p prebuild
+
+          # Build all platforms
+          for GOOS in darwin linux windows; do
+            for GOARCH in amd64 arm64; do
+              OUTPUT="prebuild/glaw-${GOOS}-${GOARCH}"
+              if [ "$GOOS" = "windows" ]; then
+                OUTPUT="${OUTPUT}.exe"
+              fi
+              echo "Building ${OUTPUT}..."
+              CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
+                go build -ldflags "$LDFLAGS" -o "$OUTPUT" ./cmd/glaw/
+            done
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: prebuild/glaw-*

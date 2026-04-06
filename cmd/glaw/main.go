@@ -18,6 +18,9 @@ import (
 	"github.com/hieu-glaw/glaw-code/internal/web"
 )
 
+// Version is set at build time via -ldflags "-X main.Version=...".
+var Version = "dev"
+
 func main() {
 	// Handle serve subcommand
 	if len(os.Args) > 1 && os.Args[1] == "serve" {
@@ -108,7 +111,7 @@ func main() {
 	flag.Parse()
 
 	if showVersion {
-		fmt.Println("glaw-code v1.0.0")
+		fmt.Printf("glaw-code %s\n", Version)
 		os.Exit(0)
 	}
 
