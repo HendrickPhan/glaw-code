@@ -43,18 +43,12 @@ func ReadLineWithCompletion(prompt string) (string, error) {
 
 		switch {
 		case b == 3: // Ctrl+C
-			if completionLineCount > 0 {
-				eraseCompletion(completionLineCount)
-				completionLineCount = 0
-			}
+			clearAndEraseCompletion(&completionLineCount)
 			fmt.Print("\r\n")
 			return "", fmt.Errorf("interrupted")
 
 		case b == 13 || b == 10: // Enter
-			if completionLineCount > 0 {
-				eraseCompletion(completionLineCount)
-				completionLineCount = 0
-			}
+			clearAndEraseCompletion(&completionLineCount)
 			fmt.Print("\r\n")
 			return line.String(), nil
 
@@ -66,24 +60,16 @@ func ReadLineWithCompletion(prompt string) (string, error) {
 				runes = runes[:len(runes)-1]
 				line.Reset()
 				line.WriteString(string(runes))
-				if completionLineCount > 0 {
-					eraseCompletion(completionLineCount)
-					completionLineCount = 0
-				}
+				clearAndEraseCompletion(&completionLineCount)
 				redrawLine(prompt, line.String())
-				if strings.HasPrefix(line.String(), "/") && !strings.Contains(line.String()[1:], " ") {
-					matches := matchCommands(line.String())
-					selectedIdx = 0
-					completionLineCount = showCompletion(matches, selectedIdx)
-				}
+				completionLineCount = tryShowCompletion(line.String(), &selectedIdx)
 			}
 
 		case b == 9: // Tab
 			if completionLineCount > 0 {
 				matches := matchCommands(line.String())
 				if len(matches) > 0 {
-					eraseCompletion(completionLineCount)
-					completionLineCount = 0
+					clearAndEraseCompletion(&completionLineCount)
 					if len(matches) > 1 {
 						selectedIdx = (selectedIdx + 1) % len(matches)
 						line.Reset()
@@ -102,23 +88,34 @@ func ReadLineWithCompletion(prompt string) (string, error) {
 		default:
 			// Printable character
 			if b >= 32 && b < 127 {
-				if completionLineCount > 0 {
-					eraseCompletion(completionLineCount)
-					completionLineCount = 0
-				}
+				clearAndEraseCompletion(&completionLineCount)
 
 				line.WriteByte(b)
 				redrawLine(prompt, line.String())
 
-				current := line.String()
-				if strings.HasPrefix(current, "/") && !strings.Contains(current[1:], " ") {
-					matches := matchCommands(current)
-					selectedIdx = 0
-					completionLineCount = showCompletion(matches, selectedIdx)
-				}
+				completionLineCount = tryShowCompletion(line.String(), &selectedIdx)
 			}
 		}
 	}
+}
+
+// clearAndEraseCompletion erases completion suggestions and resets the counter to 0.
+func clearAndEraseCompletion(count *int) {
+	if *count > 0 {
+		eraseCompletion(*count)
+	}
+	*count = 0
+}
+
+// tryShowCompletion shows autocomplete suggestions if the input is a slash command prefix.
+// Returns the number of completion lines printed.
+func tryShowCompletion(input string, selectedIdx *int) int {
+	if strings.HasPrefix(input, "/") && !strings.Contains(input[1:], " ") {
+		matches := matchCommands(input)
+		*selectedIdx = 0
+		return showCompletion(matches, *selectedIdx)
+	}
+	return 0
 }
 
 // redrawLine clears the current line and redraws prompt + content.
