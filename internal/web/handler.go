@@ -340,18 +340,35 @@ func convertSessionMessages(session *runtime.Session) []map[string]interface{} {
 	for _, msg := range session.Messages {
 		switch msg.Role {
 		case "user":
-			// Extract text from user blocks
-			var texts []string
+			// Check if this is a tool_result user message
+			hasToolResult := false
 			for _, block := range msg.Blocks {
-				if block.Type == api.ContentText {
-					texts = append(texts, block.Text)
+				if block.Type == api.ContentToolResult {
+					hasToolResult = true
+					result = append(result, map[string]interface{}{
+						"role": "tool",
+						"toolResult": map[string]interface{}{
+							"id":      block.ToolUseID,
+							"content": block.Content,
+							"isError": block.IsError,
+						},
+					})
 				}
 			}
-			if len(texts) > 0 {
-				result = append(result, map[string]interface{}{
-					"role":    "user",
-					"content": joinTexts(texts),
-				})
+			// If no tool results, treat as regular user message
+			if !hasToolResult {
+				var texts []string
+				for _, block := range msg.Blocks {
+					if block.Type == api.ContentText {
+						texts = append(texts, block.Text)
+					}
+				}
+				if len(texts) > 0 {
+					result = append(result, map[string]interface{}{
+						"role":    "user",
+						"content": joinTexts(texts),
+					})
+				}
 			}
 
 		case "assistant":
@@ -369,21 +386,6 @@ func convertSessionMessages(session *runtime.Session) []map[string]interface{} {
 							"id":    block.ID,
 							"name":  block.Name,
 							"input": string(block.Input),
-						},
-					})
-				}
-			}
-
-		case "tool":
-			// Tool results — find the matching tool_use and attach
-			for _, block := range msg.Blocks {
-				if block.Type == api.ContentToolResult {
-					result = append(result, map[string]interface{}{
-						"role": "tool",
-						"toolResult": map[string]interface{}{
-							"id":      block.ToolUseID,
-							"content": block.Content,
-							"isError": block.IsError,
 						},
 					})
 				}

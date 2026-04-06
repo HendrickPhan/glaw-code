@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -8,6 +9,9 @@ import (
 	"github.com/hieu-glaw/glaw-code/internal/commands"
 	"golang.org/x/term"
 )
+
+// ErrInterrupted is returned when the user presses Ctrl+C at the input prompt.
+var ErrInterrupted = errors.New("interrupted")
 
 // ReadLineWithCompletion reads a line from stdin with slash-command autocomplete.
 // When the user types '/', matching commands are shown. Tab completes the prefix.
@@ -45,7 +49,7 @@ func ReadLineWithCompletion(prompt string) (string, error) {
 		case b == 3: // Ctrl+C
 			clearAndEraseCompletion(&completionLineCount)
 			fmt.Print("\r\n")
-			return "", fmt.Errorf("interrupted")
+			return "", ErrInterrupted
 
 		case b == 13 || b == 10: // Enter
 			clearAndEraseCompletion(&completionLineCount)

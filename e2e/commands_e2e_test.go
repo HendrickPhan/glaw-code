@@ -42,6 +42,15 @@ func (m *mockRuntimeFS) GetModel() string                    { return m.model }
 func (m *mockRuntimeFS) SetModel(s string)                  { m.model = s }
 func (m *mockRuntimeFS) GetPermissionMode() string           { return m.permMode }
 func (m *mockRuntimeFS) SetPermissionMode(s string)          { m.permMode = s }
+func (m *mockRuntimeFS) IsYoloMode() bool                    { return m.permMode == "yolo" }
+func (m *mockRuntimeFS) ToggleYoloMode() bool {
+	if m.permMode == "yolo" {
+		m.permMode = "workspace_write"
+		return false
+	}
+	m.permMode = "yolo"
+	return true
+}
 func (m *mockRuntimeFS) GetMessageCount() int                { return m.msgCount }
 func (m *mockRuntimeFS) GetSessionID() string                { return m.sessionID }
 func (m *mockRuntimeFS) GetUsageInfo() commands.UsageInfo    { return m.usage }
@@ -62,6 +71,8 @@ func (m *mockRuntimeFS) RunGitCommand(args ...string) (string, error) {
 func (m *mockRuntimeFS) GetLSPStatus() []commands.LSPServerStatus { return nil }
 func (m *mockRuntimeFS) RevertLastTurn() (int, error)            { return 0, nil }
 func (m *mockRuntimeFS) RevertAll() (int, error)                 { return 0, nil }
+func (m *mockRuntimeFS) LoadSession(sessionID string) error      { m.sessionID = sessionID; return nil }
+func (m *mockRuntimeFS) NewSession()                              { m.sessionID = "sess_new"; m.msgCount = 0 }
 
 func handleCmd(t *testing.T, d *commands.Dispatcher, input string) *commands.Result {
 	t.Helper()
@@ -332,6 +343,7 @@ func TestE2ECmdSessionWorkflow(t *testing.T) {
 	sessionsDir := filepath.Join(dir, ".glaw", "sessions")
 	if err := os.MkdirAll(sessionsDir, 0o755); err != nil { t.Fatal(err) }
 	if err := os.WriteFile(filepath.Join(sessionsDir, "sess_test.json"), []byte(`{"id":"sess_test"}`), 0o644); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(filepath.Join(sessionsDir, "sess_other.json"), []byte(`{"id":"sess_other"}`), 0o644); err != nil { t.Fatal(err) }
 	chdir(t, dir)
 
 	d := commands.NewDispatcher(newMockRuntimeFS(dir))
@@ -339,18 +351,27 @@ func TestE2ECmdSessionWorkflow(t *testing.T) {
 	// List
 	result := handleCmd(t, d, "/session list")
 	if !strings.Contains(result.Message, "sess_test") {
-		t.Errorf("list: %q", result.Message)
+		t.Errorf("list missing sess_test: %q", result.Message)
+	}
+	if !strings.Contains(result.Message, "sess_other") {
+		t.Errorf("list missing sess_other: %q", result.Message)
 	}
 
-	// Delete
-	result = handleCmd(t, d, "/session delete sess_test")
+	// Delete a non-current session
+	result = handleCmd(t, d, "/session delete sess_other")
 	if !strings.Contains(result.Message, "deleted") {
 		t.Errorf("delete: %q", result.Message)
 	}
 
 	// Verify file removed
-	if _, err := os.Stat(filepath.Join(sessionsDir, "sess_test.json")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(sessionsDir, "sess_other.json")); !os.IsNotExist(err) {
 		t.Error("session file should be deleted")
+	}
+
+	// Cannot delete the current session
+	result = handleCmd(t, d, "/session delete sess_test")
+	if !strings.Contains(result.Message, "Cannot delete the current session") {
+		t.Errorf("should prevent deleting current: %q", result.Message)
 	}
 }
 
@@ -561,8 +582,9 @@ func TestE2ECmdResumeWithID(t *testing.T) {
 	if !strings.Contains(result.Message, "my-session-id") {
 		t.Errorf("resume with id: %q", result.Message)
 	}
-	if !strings.Contains(result.Message, "glaw-code --session") {
-		t.Errorf("should show restart command: %q", result.Message)
+	// Now uses in-REPL switching instead of restart message
+	if !strings.Contains(result.Message, "Resumed session") {
+		t.Errorf("should confirm session resume: %q", result.Message)
 	}
 }
 

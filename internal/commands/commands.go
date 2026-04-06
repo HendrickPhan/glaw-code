@@ -46,11 +46,15 @@ type Runtime interface {
 	SetModel(model string)
 	GetPermissionMode() string
 	SetPermissionMode(mode string)
+	IsYoloMode() bool
+	ToggleYoloMode() bool
 	GetMessageCount() int
 	GetSessionID() string
 	GetUsageInfo() UsageInfo
 	CompactSession() error
 	ClearSession()
+	LoadSession(sessionID string) error
+	NewSession()
 	RunGitCommand(args ...string) (string, error)
 	GetWorkspaceRoot() string
 	GetAllSettings() map[string]interface{}
@@ -100,13 +104,14 @@ var Specs = []Spec{
 	{Name: "teleport", Summary: "Remote session teleport", ArgumentHint: "<host:port>", Category: CategoryCore},
 	{Name: "debug-tool-call", Summary: "Debug tool call tracing", ArgumentHint: "[on|off]", Category: CategoryCore},
 	{Name: "export", Summary: "Export session data", ArgumentHint: "[filename]", Category: CategorySession},
-	{Name: "session", Summary: "Session management", ArgumentHint: "[list|load|delete]", Category: CategorySession},
+	{Name: "session", Summary: "Session management", ArgumentHint: "[list|load|new|delete]", Category: CategorySession},
 	{Name: "plugin", Summary: "Plugin management", ArgumentHint: "[install|enable|disable|list]", Category: CategoryCore},
 	{Name: "agents", Summary: "List available agents", Category: CategoryCore},
 	{Name: "skills", Summary: "List available skills", Category: CategoryCore},
 	{Name: "btw", Summary: "Ask a side question during execution", ArgumentHint: "<question>", Category: CategoryCore},
 	{Name: "tasks", Summary: "Manage agent tasks", ArgumentHint: "[create|list|update|delete] [args]", Category: CategoryCore},
 	{Name: "lsp", Summary: "LSP server management and status", ArgumentHint: "[status|restart|detect]", Category: CategoryWorkspace},
+	{Name: "yolo", Summary: "Toggle yolo mode (auto-approve all tool calls)", Category: CategoryCore},
 {Name: "revert", Aliases: []string{"undo"}, Summary: "Revert file changes from the last turn", ArgumentHint: "[all]", Category: CategoryWorkspace},
 }
 
@@ -274,6 +279,8 @@ func (d *Dispatcher) dispatch(ctx context.Context, cmd *ParsedCommand) (*Result,
 		return d.handleTasks(cmd.Remainder)
 	case "lsp":
 		return d.handleLSP(cmd.Remainder)
+	case "yolo":
+		return d.handleYolo()
 	case "revert":
 		return d.handleRevert(cmd.Remainder)
 	case "quit", "exit":
@@ -332,6 +339,15 @@ func (d *Dispatcher) handlePermissions(remainder string) (*Result, error) {
 	}
 	d.runtime.SetPermissionMode(remainder)
 	return &Result{Action: "continue", Message: fmt.Sprintf("Permissions set to: %s", remainder)}, nil
+}
+
+func (d *Dispatcher) handleYolo() (*Result, error) {
+	enabled := d.runtime.ToggleYoloMode()
+	if enabled {
+		return &Result{Action: "continue", Message: "🔥 YOLO MODE ENABLED 🔥\nAll tool calls will be auto-approved. No confirmation required.\nUse /yolo again to disable."}, nil
+	}
+	prevMode := d.runtime.GetPermissionMode()
+	return &Result{Action: "continue", Message: fmt.Sprintf("Yolo mode disabled. Permissions restored to: %s", prevMode)}, nil
 }
 
 func (d *Dispatcher) handleCost() (*Result, error) {
@@ -583,7 +599,11 @@ func (d *Dispatcher) handleResume(remainder string) (*Result, error) {
 		}
 		return &Result{Action: "continue", Message: "Available sessions:\n" + strings.Join(sessions, "\n") + "\n\nUsage: /resume <session-id>"}, nil
 	}
-	return &Result{Action: "continue", Message: fmt.Sprintf("To resume session %s, restart with: glaw-code --session %s", remainder, remainder)}, nil
+	// Use the new in-REPL session switching
+	if err := d.runtime.LoadSession(remainder); err != nil {
+		return &Result{Action: "continue", Message: "Failed to resume session: " + err.Error()}, nil
+	}
+	return &Result{Action: "continue", Message: fmt.Sprintf("Resumed session: %s (%d messages loaded).", d.runtime.GetSessionID(), d.runtime.GetMessageCount())}, nil
 }
 
 // --- Session management ---
@@ -591,17 +611,18 @@ func (d *Dispatcher) handleResume(remainder string) (*Result, error) {
 func (d *Dispatcher) handleSession(remainder string) (*Result, error) {
 	parts := strings.Fields(remainder)
 	if len(parts) == 0 {
-		return &Result{Action: "continue", Message: fmt.Sprintf("Current session: %s\nMessages: %d", d.runtime.GetSessionID(), d.runtime.GetMessageCount())}, nil
+		return &Result{Action: "continue", Message: fmt.Sprintf("Current session: %s\nMessages: %d\n\nUsage: /session [list|load|new|delete] [session-id]", d.runtime.GetSessionID(), d.runtime.GetMessageCount())}, nil
 	}
 
 	switch parts[0] {
-	case "list":
+	case "list", "ls":
 		sessionsDir := filepath.Join(".glaw", "sessions")
 		entries, err := os.ReadDir(sessionsDir)
 		if err != nil {
-			return &Result{Action: "continue", Message: "No sessions directory found."}, nil
+			return &Result{Action: "continue", Message: "No sessions directory found. Sessions are saved automatically."}, nil
 		}
-		var sessions []string
+		var current, other []string
+		currentID := d.runtime.GetSessionID()
 		for _, e := range entries {
 			if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
 				info, err := e.Info()
@@ -609,29 +630,64 @@ func (d *Dispatcher) handleSession(remainder string) (*Result, error) {
 					continue
 				}
 				name := strings.TrimSuffix(e.Name(), ".json")
-				sessions = append(sessions, fmt.Sprintf("  %s  (%s)", name, info.ModTime().Format("2006-01-02 15:04")))
+				msgCount := ""
+				// Try to read message count from session file
+				data, err := os.ReadFile(filepath.Join(sessionsDir, e.Name()))
+				if err == nil {
+					var sess struct {
+						Messages []struct{} `json:"messages"`
+					}
+					if json.Unmarshal(data, &sess) == nil {
+						msgCount = fmt.Sprintf("  %d msgs", len(sess.Messages))
+					}
+				}
+				line := fmt.Sprintf("  %s  %s%s", name, info.ModTime().Format("2006-01-02 15:04"), msgCount)
+				if name == currentID {
+					current = append(current, line+"  ← current")
+				} else {
+					other = append(other, line)
+				}
 			}
 		}
+		var sessions []string
+		sessions = append(sessions, current...)
+		sessions = append(sessions, other...)
 		if len(sessions) == 0 {
 			return &Result{Action: "continue", Message: "No saved sessions found."}, nil
 		}
-		return &Result{Action: "continue", Message: "Saved sessions:\n" + strings.Join(sessions, "\n")}, nil
-	case "load":
+		return &Result{Action: "continue", Message: "Sessions:\n" + strings.Join(sessions, "\n") + "\n\nSwitch: /session load <id>   New: /session new   Delete: /session delete <id>"}, nil
+
+	case "load", "switch":
 		if len(parts) < 2 {
-			return &Result{Action: "continue", Message: "Usage: /session load <session-id>"}, nil
+			return &Result{Action: "continue", Message: "Usage: /session load <session-id>\nUse /session list to see available sessions."}, nil
 		}
-		return &Result{Action: "continue", Message: fmt.Sprintf("To resume session %s, restart with: glaw-code --session %s", parts[1], parts[1])}, nil
-	case "delete":
+		sessionID := parts[1]
+		if err := d.runtime.LoadSession(sessionID); err != nil {
+			return &Result{Action: "continue", Message: "Failed to load session: " + err.Error()}, nil
+		}
+		return &Result{Action: "continue", Message: fmt.Sprintf("Switched to session: %s (%d messages from previous conversation loaded).\nPrevious session saved automatically.", d.runtime.GetSessionID(), d.runtime.GetMessageCount())}, nil
+
+	case "new":
+		oldID := d.runtime.GetSessionID()
+		d.runtime.NewSession()
+		return &Result{Action: "continue", Message: fmt.Sprintf("New session created: %s\nPrevious session %s saved automatically.", d.runtime.GetSessionID(), oldID)}, nil
+
+	case "delete", "rm":
 		if len(parts) < 2 {
 			return &Result{Action: "continue", Message: "Usage: /session delete <session-id>"}, nil
+		}
+		// Prevent deleting the current session
+		if parts[1] == d.runtime.GetSessionID() {
+			return &Result{Action: "continue", Message: "Cannot delete the current session. Use /session new first to switch to a new session."}, nil
 		}
 		path := filepath.Join(".glaw", "sessions", parts[1]+".json")
 		if err := os.Remove(path); err != nil {
 			return &Result{Action: "continue", Message: "Failed to delete session: " + err.Error()}, nil
 		}
 		return &Result{Action: "continue", Message: fmt.Sprintf("Session %s deleted.", parts[1])}, nil
+
 	default:
-		return &Result{Action: "continue", Message: "Usage: /session [list|load|delete] [session-id]"}, nil
+		return &Result{Action: "continue", Message: "Usage: /session [list|load|new|delete] [session-id]\n\n  list     - Show all saved sessions\n  load <id>- Switch to a different session\n  new      - Create a fresh session\n  delete <id> - Delete a saved session"}, nil
 	}
 }
 

@@ -19,6 +19,15 @@ func (m *mockRuntime) GetModel() string         { return m.model }
 func (m *mockRuntime) SetModel(s string)         { m.model = s }
 func (m *mockRuntime) GetPermissionMode() string { return m.permMode }
 func (m *mockRuntime) SetPermissionMode(s string) { m.permMode = s }
+func (m *mockRuntime) IsYoloMode() bool           { return m.permMode == "yolo" }
+func (m *mockRuntime) ToggleYoloMode() bool {
+	if m.permMode == "yolo" {
+		m.permMode = "workspace_write"
+		return false
+	}
+	m.permMode = "yolo"
+	return true
+}
 func (m *mockRuntime) GetMessageCount() int       { return m.msgCount }
 func (m *mockRuntime) GetSessionID() string       { return m.sessionID }
 func (m *mockRuntime) GetUsageInfo() UsageInfo    { return m.usage }
@@ -36,6 +45,8 @@ func (m *mockRuntime) SetConfigValue(key, value string) error  { return nil }
 func (m *mockRuntime) GetLSPStatus() []LSPServerStatus         { return nil }
 func (m *mockRuntime) RevertLastTurn() (int, error)            { return 0, nil }
 func (m *mockRuntime) RevertAll() (int, error)                 { return 0, nil }
+func (m *mockRuntime) LoadSession(sessionID string) error      { m.sessionID = sessionID; return nil }
+func (m *mockRuntime) NewSession()                              { m.sessionID = "sess_new"; m.msgCount = 0 }
 
 func newMockRuntime() *mockRuntime {
 	return &mockRuntime{

@@ -49,6 +49,15 @@ func TestNewToolUseBlock(t *testing.T) {
 	}
 }
 
+func TestNewToolUseBlockNilInput(t *testing.T) {
+	// Nil input should default to empty JSON object {} to prevent
+	// "expected str instance, NoneType found" API errors
+	b := NewToolUseBlock("call_123", "bash", nil)
+	if string(b.Input) != `{}` {
+		t.Errorf("Input = %q, want %q for nil input", string(b.Input), `{}`)
+	}
+}
+
 func TestNewToolResultBlock(t *testing.T) {
 	b := NewToolResultBlock("call_123", "file contents", false)
 	if b.ToolUseID != "call_123" {

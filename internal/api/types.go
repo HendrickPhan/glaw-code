@@ -47,7 +47,12 @@ func NewTextBlock(text string) ContentBlock {
 }
 
 // NewToolUseBlock creates a tool_use content block.
+// If input is nil, it defaults to an empty JSON object {} to avoid
+// sending null to the API, which causes "expected str instance, NoneType found" errors.
 func NewToolUseBlock(id, name string, input json.RawMessage) ContentBlock {
+	if input == nil {
+		input = json.RawMessage(`{}`)
+	}
 	return ContentBlock{Type: ContentToolUse, ID: id, Name: name, Input: input}
 }
 

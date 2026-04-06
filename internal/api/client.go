@@ -57,7 +57,7 @@ type AnthropicClient struct {
 // NewAnthropicClient creates a new Anthropic API client.
 func NewAnthropicClient(config ClientConfig) *AnthropicClient {
 	if config.Timeout == 0 {
-		config.Timeout = 120 * time.Second
+		config.Timeout = 30 * time.Minute
 	}
 	if config.MaxRetries == 0 {
 		config.MaxRetries = 2
@@ -312,7 +312,7 @@ type OpenAICompatClient struct {
 // NewOpenAICompatClient creates a new OpenAI-compatible client.
 func NewOpenAICompatClient(config ClientConfig) *OpenAICompatClient {
 	if config.Timeout == 0 {
-		config.Timeout = 120 * time.Second
+		config.Timeout = 30 * time.Minute
 	}
 	return &OpenAICompatClient{
 		config: config,

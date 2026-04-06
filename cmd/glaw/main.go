@@ -172,9 +172,7 @@ func main() {
 	// Create permission manager
 	permManager := runtime.NewPermissionManager(cfg.PermissionMode, workspaceRoot)
 
-	// Setup signal handling
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := context.Background()
 
 	// Initialize MCP manager
 	mcpManager := mcp.NewManager()
@@ -192,32 +190,36 @@ func main() {
 	rt := runtime.NewConversationRuntime(client, cfg, session, permManager, toolExec)
 	rt.Snapshotter = snapshotExec
 
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigChan
-		fmt.Println("\nInterrupted. Saving session...")
-		_ = mcpManager.Shutdown()
-		if path, err := runtime.SaveSession(session, filepath.Join(workspaceRoot, ".glaw", "sessions")); err == nil {
-			fmt.Printf("Session saved to %s\n", path)
-		}
-		cancel()
-	}()
-
 	// Run
 	if prompt != "" {
-		// One-shot mode
+		// One-shot mode: set up signal handler for graceful shutdown
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			<-sigChan
+			fmt.Println("\nInterrupted. Saving session...")
+			_ = mcpManager.Shutdown()
+			if path, err := runtime.SaveSession(session, filepath.Join(workspaceRoot, ".glaw", "sessions")); err == nil {
+				fmt.Printf("Session saved to %s\n", path)
+			}
+			cancel()
+		}()
+
 		if err := cli.RunOneShot(ctx, rt, prompt); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 	} else if !noInput {
-		// Interactive REPL
+		// Interactive REPL — signal handling is managed by the REPL itself
 		repl := cli.NewREPL(rt)
 		if err := repl.Run(ctx); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
+		// Graceful cleanup after REPL exits
+		_ = mcpManager.Shutdown()
 	} else {
 		fmt.Fprintln(os.Stderr, "No prompt provided and --no-input set. Nothing to do.")
 		os.Exit(1)

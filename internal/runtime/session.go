@@ -211,19 +211,20 @@ func (s *Session) AddAssistantMessage(blocks []api.ContentBlock, usage *api.Usag
 	})
 }
 
-// AddToolResult appends a tool result to the last assistant message.
+// AddToolResult adds a tool result as a new user message.
+// The Anthropic Messages API requires tool_result blocks to be in user
+// messages, not in assistant messages.
 func (s *Session) AddToolResult(toolUseID, content string, isError bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Find the last assistant message and append the tool result
-	for i := len(s.Messages) - 1; i >= 0; i-- {
-		if s.Messages[i].Role == string(api.RoleAssistant) {
-			s.Messages[i].Blocks = append(s.Messages[i].Blocks,
-				api.NewToolResultBlock(toolUseID, content, isError))
-			return
-		}
-	}
+	// Add as a user message containing a tool_result block.
+	// This matches the Anthropic API convention where tool results
+	// are sent as user messages with role "user".
+	s.Messages = append(s.Messages, ConversationMessage{
+		Role:   string(api.RoleUser),
+		Blocks: []api.ContentBlock{api.NewToolResultBlock(toolUseID, content, isError)},
+	})
 }
 
 // MessageCount returns the number of messages.
@@ -234,16 +235,32 @@ func (s *Session) MessageCount() int {
 }
 
 // AsAPIMessages converts session messages to API format.
+// It ensures tool_result blocks are in user messages (per Anthropic API spec)
+// and filters out any empty content blocks.
 func (s *Session) AsAPIMessages() []api.Message {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	msgs := make([]api.Message, len(s.Messages))
-	for i, m := range s.Messages {
-		msgs[i] = api.Message{
-			Role:    api.MessageRole(m.Role),
-			Content: m.Blocks,
+	var msgs []api.Message
+	for _, m := range s.Messages {
+		if len(m.Blocks) == 0 {
+			continue
 		}
+
+		// Ensure content blocks don't have nil fields that could cause API errors
+		cleanBlocks := make([]api.ContentBlock, 0, len(m.Blocks))
+		for _, b := range m.Blocks {
+			// Ensure tool_use blocks have non-nil Input
+			if b.Type == api.ContentToolUse && b.Input == nil {
+				b.Input = json.RawMessage(`{}`)
+			}
+			cleanBlocks = append(cleanBlocks, b)
+		}
+
+		msgs = append(msgs, api.Message{
+			Role:    api.MessageRole(m.Role),
+			Content: cleanBlocks,
+		})
 	}
 	return msgs
 }
@@ -291,6 +308,7 @@ const (
 	PermDangerFullAccess PermissionMode = "danger_full_access"
 	PermPrompt           PermissionMode = "prompt"
 	PermAllow            PermissionMode = "allow"
+	PermYolo             PermissionMode = "yolo"
 )
 
 // Permission represents a specific permission type.
@@ -306,9 +324,10 @@ const (
 
 // PermissionManager handles permission checking.
 type PermissionManager struct {
-	Mode         PermissionMode
+	Mode          PermissionMode
 	WorkspaceRoot string
-	Allowed      map[Permission]bool
+	Allowed       map[Permission]bool
+	PreviousMode  PermissionMode // stores the mode before yolo was enabled
 }
 
 // NewPermissionManager creates a new permission manager.
@@ -320,10 +339,35 @@ func NewPermissionManager(mode PermissionMode, workspaceRoot string) *Permission
 	}
 }
 
+// IsYolo returns true if yolo mode is active.
+func (m *PermissionManager) IsYolo() bool {
+	return m.Mode == PermYolo
+}
+
+// ToggleYolo enables or disables yolo mode.
+// When enabling, it saves the current mode so it can be restored.
+// When disabling, it restores the previous mode.
+func (m *PermissionManager) ToggleYolo() bool {
+	if m.Mode == PermYolo {
+		// Disable yolo: restore previous mode
+		if m.PreviousMode != "" {
+			m.Mode = m.PreviousMode
+		} else {
+			m.Mode = PermWorkspaceWrite
+		}
+		m.PreviousMode = ""
+		return false
+	}
+	// Enable yolo: save current mode
+	m.PreviousMode = m.Mode
+	m.Mode = PermYolo
+	return true
+}
+
 // Check evaluates whether a permission is granted.
 func (m *PermissionManager) Check(perm Permission) bool {
 	switch m.Mode {
-	case PermAllow, PermDangerFullAccess:
+	case PermAllow, PermDangerFullAccess, PermYolo:
 		return true
 	case PermReadOnly:
 		return perm == PermReadFile || perm == PermNetwork
@@ -339,7 +383,7 @@ func (m *PermissionManager) Check(perm Permission) bool {
 // CheckTool evaluates whether a tool can be used based on required permission.
 func (m *PermissionManager) CheckTool(toolName string, requiredPerm PermissionMode) bool {
 	switch m.Mode {
-	case PermAllow, PermDangerFullAccess:
+	case PermAllow, PermDangerFullAccess, PermYolo:
 		return true
 	case PermReadOnly:
 		return requiredPerm == PermReadOnly || requiredPerm == ""
@@ -791,6 +835,49 @@ type ConversationRuntime struct {
 	// If it returns false, the tool is not executed and the message is
 	// returned as a tool error to the model.
 	PermissionChecker func(toolName string, input json.RawMessage) bool
+
+	// running tracks whether an agentic action is currently in progress.
+	running bool
+	// cancelAction can be called to cancel the current running action.
+	cancelAction context.CancelFunc
+	mu          sync.Mutex
+}
+
+// IsRunning returns whether an agentic action is currently in progress.
+func (r *ConversationRuntime) IsRunning() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.running
+}
+
+// SetRunning marks an action as running and stores the cancel function.
+func (r *ConversationRuntime) SetRunning(cancel context.CancelFunc) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.running = true
+	r.cancelAction = cancel
+}
+
+// SetIdle marks the action as no longer running.
+func (r *ConversationRuntime) SetIdle() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.running = false
+	r.cancelAction = nil
+}
+
+// CancelAction cancels the currently running action (if any).
+// Returns true if an action was cancelled.
+func (r *ConversationRuntime) CancelAction() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cancelAction != nil {
+		r.cancelAction()
+		r.cancelAction = nil
+		r.running = false
+		return true
+	}
+	return false
 }
 
 // LSPProvider provides LSP context enrichment for the system prompt.
@@ -848,6 +935,10 @@ func (r *ConversationRuntime) Turn(ctx context.Context) (*TurnResult, error) {
 	resp, err := r.APIClient.SendMessage(ctx, req)
 	spin.Stop()
 	if err != nil {
+		// Check if the context was cancelled (user-initiated cancel)
+		if ctx.Err() != nil {
+			return nil, &ActionCancelledError{}
+		}
 		return nil, err
 	}
 
@@ -873,9 +964,29 @@ func (r *ConversationRuntime) Turn(ctx context.Context) (*TurnResult, error) {
 	}, nil
 }
 
+// ActionCancelledError is returned when the user cancels a running action.
+type ActionCancelledError struct{}
+
+func (e *ActionCancelledError) Error() string {
+	return "action cancelled by user"
+}
+
+// IsActionCancelled returns true if the error is due to user cancellation.
+func IsActionCancelled(err error) bool {
+	_, ok := err.(*ActionCancelledError)
+	return ok
+}
+
 // RunLoop executes multiple turns until done with rich terminal output.
 func (r *ConversationRuntime) RunLoop(ctx context.Context) error {
 	for {
+		// Check for cancellation before each turn
+		select {
+		case <-ctx.Done():
+			return &ActionCancelledError{}
+		default:
+		}
+
 		result, err := r.Turn(ctx)
 		if err != nil {
 			return err
@@ -913,6 +1024,13 @@ func (r *ConversationRuntime) RunLoop(ctx context.Context) error {
 		// If tool use, execute tools with spinners and continue the loop
 		if result.StopReason == api.StopToolUse {
 			for _, tc := range result.ToolCalls {
+				// Check for cancellation before each tool
+				select {
+				case <-ctx.Done():
+					return &ActionCancelledError{}
+				default:
+				}
+
 				// Show tool header
 				fmt.Println(renderToolHeader(tc.Name, tc.Input))
 
@@ -932,6 +1050,11 @@ func (r *ConversationRuntime) RunLoop(ctx context.Context) error {
 				toolSpin.Stop()
 
 				if err != nil {
+					if ctx.Err() != nil {
+						fmt.Println(renderToolDone(tc.Name, "Cancelled", true, elapsed))
+						r.Session.AddToolResult(tc.ID, "Tool execution cancelled by user", true)
+						return &ActionCancelledError{}
+					}
 					fmt.Println(renderToolDone(tc.Name, err.Error(), true, elapsed))
 					r.Session.AddToolResult(tc.ID, err.Error(), true)
 				} else {
@@ -1029,6 +1152,17 @@ func (r *ConversationRuntime) SetPermissionMode(mode string) {
 	r.Permissions.Mode = PermissionMode(mode)
 }
 
+// IsYoloMode returns whether yolo mode is currently active.
+func (r *ConversationRuntime) IsYoloMode() bool {
+	return r.Permissions.IsYolo()
+}
+
+// ToggleYoloMode toggles yolo mode on/off.
+// Returns true if yolo is now enabled, false if disabled.
+func (r *ConversationRuntime) ToggleYoloMode() bool {
+	return r.Permissions.ToggleYolo()
+}
+
 // GetMessageCount returns the number of messages in the session.
 func (r *ConversationRuntime) GetMessageCount() int {
 	return r.Session.MessageCount()
@@ -1037,6 +1171,51 @@ func (r *ConversationRuntime) GetMessageCount() int {
 // GetSessionID returns the session ID.
 func (r *ConversationRuntime) GetSessionID() string {
 	return r.Session.ID
+}
+
+// LoadSession replaces the current session with one loaded from disk.
+// It first saves the current session, then loads the requested one,
+// and resets the usage tracker.
+func (r *ConversationRuntime) LoadSession(sessionID string) error {
+	workspaceRoot := r.GetWorkspaceRoot()
+	sessionsDir := filepath.Join(workspaceRoot, ".glaw", "sessions")
+
+	// Save current session first
+	if r.Session.ID != "" {
+		if _, err := SaveSession(r.Session, sessionsDir); err != nil {
+			return fmt.Errorf("saving current session: %w", err)
+		}
+	}
+
+	// Load the requested session
+	path := filepath.Join(sessionsDir, sessionID+".json")
+	session, err := LoadSession(path)
+	if err != nil {
+		return fmt.Errorf("loading session %s: %w", sessionID, err)
+	}
+
+	// Replace session and reset usage
+	r.Session = session
+	r.Usage = NewUsageTracker()
+
+	return nil
+}
+
+// NewSession saves the current session and creates a fresh empty one.
+func (r *ConversationRuntime) NewSession() {
+	workspaceRoot := r.GetWorkspaceRoot()
+	sessionsDir := filepath.Join(workspaceRoot, ".glaw", "sessions")
+
+	// Save current session first
+	if r.Session.ID != "" {
+		if _, err := SaveSession(r.Session, sessionsDir); err == nil {
+			// saved successfully
+		}
+	}
+
+	// Create fresh session and reset usage
+	r.Session = NewSession()
+	r.Usage = NewUsageTracker()
 }
 
 // GetUsageInfo returns usage statistics for the commands interface.

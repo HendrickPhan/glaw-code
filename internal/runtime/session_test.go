@@ -76,9 +76,10 @@ func TestAddToolResult(t *testing.T) {
 	s.AddAssistantMessage([]api.ContentBlock{api.NewTextBlock("thinking...")}, nil)
 	s.AddToolResult("tool_1", "result data", false)
 
+	// Tool results should be added as a new user message (per Anthropic API spec)
 	last := s.Messages[len(s.Messages)-1]
-	if last.Role != string(api.RoleAssistant) {
-		t.Fatalf("expected last message to be assistant, got %q", last.Role)
+	if last.Role != string(api.RoleUser) {
+		t.Fatalf("expected last message to be user (for tool_result), got %q", last.Role)
 	}
 	found := false
 	for _, b := range last.Blocks {
