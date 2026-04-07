@@ -82,6 +82,12 @@ func NewREPL(rt *runtime.ConversationRuntime) *REPL {
 	return repl
 }
 
+// SetAgentsProvider sets the agents provider on the command dispatcher.
+// This must be called before the REPL runs if dynamic agent management is desired.
+func (r *REPL) SetAgentsProvider(p commands.AgentsProvider) {
+	r.CmdDisp.SetAgentsProvider(p)
+}
+
 // Shutdown signals the REPL to exit gracefully.
 func (r *REPL) Shutdown() {
 	r.shutdownOnce.Do(func() {

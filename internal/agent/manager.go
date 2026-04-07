@@ -3,10 +3,13 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/hieu-glaw/glaw-code/internal/commands"
 	"github.com/hieu-glaw/glaw-code/internal/runtime"
 )
 
@@ -152,4 +155,236 @@ func (m *Manager) Shutdown() {
 	for _, a := range agents {
 		a.Wait()
 	}
+}
+
+// --- commands.AgentsProvider adapter ---
+
+// AgentsProviderAdapter implements commands.AgentsProvider by combining
+// built-in sub-agents with custom agents loaded from disk.
+type AgentsProviderAdapter struct {
+	mgr *Manager
+}
+
+// NewAgentsProviderAdapter creates a new adapter. If mgr is non-nil, the
+// CallAgent method will use it to spawn real agents.
+func NewAgentsProviderAdapter(mgr *Manager) *AgentsProviderAdapter {
+	return &AgentsProviderAdapter{mgr: mgr}
+}
+
+// ListAgents returns all available agents (built-in + custom from disk).
+func (a *AgentsProviderAdapter) ListAgents(workspaceRoot string) ([]commands.AgentInfo, error) {
+	var result []commands.AgentInfo
+
+	// Built-in agents
+	for _, sa := range BuiltinSubAgents {
+		result = append(result, commands.AgentInfo{
+			Name:        sa.Name,
+			Description: sa.Description,
+			Source:      "builtin",
+			Tools:       sa.Tools,
+			Model:       sa.Model,
+			Prompt:      sa.Prompt,
+		})
+	}
+
+	// Custom agents from disk
+	if workspaceRoot != "" {
+		custom, err := LoadAllSubAgents(workspaceRoot)
+		if err == nil {
+			for _, sa := range custom {
+				source := "project"
+				if sa.Level == "user" {
+					source = "user"
+				}
+				result = append(result, commands.AgentInfo{
+					Name:        sa.Name,
+					Description: sa.Description,
+					Source:      source,
+					Tools:       sa.Tools,
+					Model:       sa.Model,
+					Prompt:      sa.Prompt,
+				})
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// GetAgent returns detailed information about a specific agent by name.
+func (a *AgentsProviderAdapter) GetAgent(workspaceRoot, name string) (*commands.AgentInfo, error) {
+	// Check built-in agents
+	for _, sa := range BuiltinSubAgents {
+		if sa.Name == name {
+			return &commands.AgentInfo{
+				Name:        sa.Name,
+				Description: sa.Description,
+				Source:      "builtin",
+				Tools:       sa.Tools,
+				Model:       sa.Model,
+				Prompt:      sa.Prompt,
+			}, nil
+		}
+	}
+
+	// Check custom agents from disk
+	if workspaceRoot != "" {
+		custom, err := LoadAllSubAgents(workspaceRoot)
+		if err == nil {
+			for _, sa := range custom {
+				if sa.Name == name {
+					source := "project"
+					if sa.Level == "user" {
+						source = "user"
+					}
+					return &commands.AgentInfo{
+						Name:        sa.Name,
+						Description: sa.Description,
+						Source:      source,
+						Tools:       sa.Tools,
+						Model:       sa.Model,
+						Prompt:      sa.Prompt,
+					}, nil
+				}
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("agent %q not found", name)
+}
+
+// CreateAgent creates a new custom agent by writing a markdown file to the
+// appropriate agents directory (.glaw/agents/ or ~/.glaw/agents/).
+func (a *AgentsProviderAdapter) CreateAgent(workspaceRoot, name, description, scope string, tools []string, model, prompt string) error {
+	if name == "" {
+		return fmt.Errorf("agent name is required")
+	}
+
+	var dir string
+	var err error
+	switch scope {
+	case "user", "global":
+		dir, err = EnsureUserAgentsDir()
+		if err != nil {
+			return err
+		}
+	default: // "project"
+		if workspaceRoot == "" {
+			return fmt.Errorf("workspace root is required for project-scoped agents")
+		}
+		dir, err = EnsureAgentsDir(workspaceRoot)
+		if err != nil {
+			return err
+		}
+	}
+
+	config := &SubAgentConfig{
+		Name:        name,
+		Description: description,
+		Tools:       tools,
+		Model:       model,
+		Prompt:      prompt,
+	}
+
+	return CreateSubAgentFile(dir, config)
+}
+
+// DeleteAgent removes a custom agent's markdown file from disk.
+func (a *AgentsProviderAdapter) DeleteAgent(workspaceRoot, name, scope string) error {
+	if name == "" {
+		return fmt.Errorf("agent name is required")
+	}
+
+	var path string
+	switch scope {
+	case "user", "global":
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("getting home directory: %w", err)
+		}
+		path = filepath.Join(home, ".glaw", "agents", name+".md")
+	default: // "project"
+		if workspaceRoot == "" {
+			return fmt.Errorf("workspace root is required for project-scoped agents")
+		}
+		path = filepath.Join(workspaceRoot, ".glaw", "agents", name+".md")
+	}
+
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return fmt.Errorf("agent %q not found at %s", name, path)
+	}
+
+	return os.Remove(path)
+}
+
+// CallAgent runs a sub-agent by name with the given prompt and returns the
+// output as a string. It uses the Manager if available, otherwise returns
+// an error.
+func (a *AgentsProviderAdapter) CallAgent(ctx context.Context, name string, prompt string) (string, error) {
+	if a.mgr == nil {
+		return "", fmt.Errorf("agent manager not available; cannot call agents from the CLI")
+	}
+
+	agent, err := a.mgr.Spawn(ctx, prompt, name)
+	if err != nil {
+		return "", fmt.Errorf("spawning agent %q: %w", name, err)
+	}
+
+	result := agent.Wait()
+	if result.Error != nil {
+		return "", fmt.Errorf("agent %q failed: %w", name, result.Error)
+	}
+
+	return result.Output, nil
+}
+
+// --- runtime.SubAgentSessionProvider adapter ---
+
+// SubAgentSessionAdapter implements runtime.SubAgentSessionProvider by
+// querying the agent.Manager for active/completed agents and their sessions.
+type SubAgentSessionAdapter struct {
+	mgr *Manager
+}
+
+// NewSubAgentSessionAdapter creates a new adapter wrapping the given manager.
+func NewSubAgentSessionAdapter(mgr *Manager) *SubAgentSessionAdapter {
+	return &SubAgentSessionAdapter{mgr: mgr}
+}
+
+// ListAgentStatuses returns metadata for every tracked sub-agent.
+func (a *SubAgentSessionAdapter) ListAgentStatuses() []commands.SubAgentSessionInfo {
+	if a.mgr == nil {
+		return nil
+	}
+	statuses := a.mgr.List()
+	var result []commands.SubAgentSessionInfo
+	for _, s := range statuses {
+		prompt := s.Description
+		if len(prompt) > 100 {
+			prompt = prompt[:97] + "..."
+		}
+		result = append(result, commands.SubAgentSessionInfo{
+			AgentID:   s.ID,
+			AgentType: s.Type,
+			Status:    s.Status,
+			Prompt:    prompt,
+		})
+	}
+	return result
+}
+
+// LoadAgentSession loads the session file associated with an agent.
+// Currently returns an error since sub-agents don't persist sessions to disk.
+// This is a placeholder for future session persistence support.
+func (a *SubAgentSessionAdapter) LoadAgentSession(agentID string) (string, int, error) {
+	if a.mgr == nil {
+		return "", 0, fmt.Errorf("no agent manager configured")
+	}
+	agent, err := a.mgr.Get(agentID)
+	if err != nil {
+		return "", 0, fmt.Errorf("agent %q not found: %w", agentID, err)
+	}
+	// Sub-agents currently run in-memory; return placeholder info.
+	// When session persistence is added, this will load the session from disk.
+	return agent.ID, 0, nil
 }

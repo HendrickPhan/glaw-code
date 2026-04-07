@@ -4,13 +4,16 @@
 //   1. Built-in sub-agent definitions and lookup
 //   2. Loading agents from .glaw/agents/ config files (markdown + YAML frontmatter)
 //   3. Project-level overrides user-level precedence
-//   4. Creating agent config files on disk with CreateSubAgentFile
-//   5. SubAgentOrchestrator: SpawnTask, WaitTask, ListTasks, GetTask, CancelTask
-//   6. SubAgentExecutor: FilterTools, BuildSystemPrompt, Execute
-//   7. ResolvedTools and ResolvedModel helpers
-//   8. The sub_agent tool through tools.Registry
-//   9. End-to-end workflow with multiple agents
-//  10. Auto-loading all agents from disk with LoadAllSubAgents
+//   4. SubAgentOrchestrator: SpawnTask, WaitTask, ListTasks, GetTask, CancelTask
+//   5. SubAgentExecutor: FilterTools, BuildSystemPrompt, Execute
+//   6. ResolvedTools and ResolvedModel helpers
+//   7. The sub_agent tool through tools.Registry
+//   8. End-to-end workflow with multiple agents
+//   9. Auto-loading all agents from disk with LoadAllSubAgents
+//
+// This example uses pre-created config files in .glaw/agents/ instead of
+// hardcoding agent definitions in code. See .glaw/agents/*.md for the
+// agent configurations.
 //
 // Run: go run examples/04-sub-agents/main.go
 package main
@@ -33,17 +36,35 @@ func main() {
 	fmt.Println("  Example 04: Sub-Agents — Complete Feature Demo")
 	fmt.Println("═══════════════════════════════════════════════════════════")
 
-	workspace, err := os.MkdirTemp("", "glaw-subagent-demo-*")
+	// Use the example directory as the workspace so .glaw/agents/*.md
+	// config files are discovered automatically.
+	workspace, err := os.Getwd()
 	check(err)
-	defer os.RemoveAll(workspace)
-	createSampleProject(workspace)
-	os.MkdirAll(filepath.Join(workspace, ".glaw"), 0o755)
+	workspace = filepath.Join(workspace, "examples", "04-sub-agents")
+
+	// Verify the agent config files exist
+	agentsDir := filepath.Join(workspace, ".glaw", "agents")
+	entries, err := os.ReadDir(agentsDir)
+	check(err)
+	fmt.Printf("Agent config files in %s:\n", agentsDir)
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
+			fmt.Printf("  - %s\n", e.Name())
+		}
+	}
+
+	// Create a temp directory for the sample project and user-level config.
+	// The sample project files are needed for the tools to work.
+	tmpDir, err := os.MkdirTemp("", "glaw-subagent-demo-*")
+	check(err)
+	defer os.RemoveAll(tmpDir)
+	createSampleProject(tmpDir)
 
 	ctx := context.Background()
 
 	// ── 1. Built-in Agent Definitions ──────────────────────────
 	section("1. Built-in Agent Definitions & Lookup")
-	fmt.Println("9 built-in agents available:")
+	fmt.Println("Built-in agents available:")
 	fmt.Println()
 
 	for _, name := range agent.BuiltinSubAgentNames() {
@@ -55,61 +76,52 @@ func main() {
 	fmt.Printf("\n  GetBuiltinSubAgent(\"Explore\") → %d tools: %v\n", len(e.Tools), e.Tools)
 	fmt.Printf("  GetBuiltinSubAgent(\"nonexistent\") → nil: %v\n", agent.GetBuiltinSubAgent("nonexistent") == nil)
 
-	// ── 2. Create Agent Config Files on Disk ───────────────────
-	section("2. Create Agent Config Files (.glaw/agents/*.md)")
-	agentsDir, err := agent.EnsureAgentsDir(workspace)
-	check(err)
-	fmt.Printf("  Agents directory: %s\n\n", agentsDir)
+	// ── 2. Show Pre-Created Config Files ───────────────────────
+	section("2. Agent Config Files (.glaw/agents/*.md)")
+	fmt.Printf("  Config directory: %s\n\n", agentsDir)
 
-	// Create agents by writing .md config files using CreateSubAgentFile.
-	// Each file uses YAML frontmatter for metadata and the body as system prompt.
-	customAgents := []*agent.SubAgentConfig{
-		{
-			Name:        "go-expert",
-			Description: "MUST BE USED for Go-specific tasks",
-			Tools:       []string{"read_file", "write_file", "edit_file", "bash", "grep_search", "glob_search"},
-			Model:       "sonnet",
-			Prompt:      "You are a Go expert. Follow effective Go guidelines. Always check error handling, naming conventions, and idiomatic Go patterns.",
-		},
-		{
-			Name:        "reviewer",
-			Description: "MUST BE USED for reviewing code quality",
-			Tools:       []string{"read_file", "grep_search", "glob_search"},
-			Model:       "sonnet",
-			Prompt:      "You are a code reviewer. Focus on readability, correctness, and maintainability.",
-		},
-		{
-			Name:        "devops",
-			Description: "MUST BE USED for CI/CD and infrastructure tasks",
-			Tools:       []string{"bash", "read_file", "write_file", "edit_file"},
-			Prompt:      "You are a DevOps engineer. Help with CI/CD pipelines, Docker, and infrastructure.",
-		},
-		{
-			Name:        "shared-name",
-			Description: "Project-level version",
-			Tools:       []string{"read_file", "bash"},
-			Prompt:      "You are the project-level agent.",
-		},
-	}
-	for _, cfg := range customAgents {
-		check(agent.CreateSubAgentFile(agentsDir, cfg))
-		fmt.Printf("  ✓ Created: %s.md\n", cfg.Name)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(agentsDir, entry.Name()))
+		check(err)
+		// Show first few lines of each config file
+		lines := strings.Split(string(data), "\n")
+		limit := 8
+		if len(lines) < limit {
+			limit = len(lines)
+		}
+		fmt.Printf("  ── %s ──\n", entry.Name())
+		for i := 0; i < limit; i++ {
+			fmt.Printf("    %s\n", lines[i])
+		}
+		if len(lines) > limit {
+			fmt.Printf("    ... (%d more lines)\n", len(lines)-limit)
+		}
+		fmt.Println()
 	}
 
-	// ── 3. Load Agents from Disk ───────────────────────────────
-	section("3. Load Agents from .glaw/agents/ (project & user level)")
+	// ── 3. Load Project-Level Agents from Disk ─────────────────
+	section("3. Load Agents from .glaw/agents/ (project level)")
 	loaded, errs := agent.LoadSubAgentsFromDir(agentsDir, "project")
 	fmt.Printf("  LoadSubAgentsFromDir → %d agents, %d errors\n", len(loaded), len(errs))
 	for _, c := range loaded {
 		fmt.Printf("    - %-15s (level=%s, tools=%v)\n", c.Name, c.Level, c.Tools)
 	}
 
-	// Create a user-level agent with the same name to test precedence
-	home := filepath.Join(workspace, ".fakehome")
+	// ── 4. User-Level Agent Config (for precedence demo) ───────
+	section("4. User-Level Agent Config & Project-Level Override")
+	// Set up a fake HOME with user-level agents to demonstrate precedence.
+	// In real usage, these would be in ~/.glaw/agents/.
+	home := filepath.Join(tmpDir, ".fakehome")
 	os.MkdirAll(home, 0o755)
 	os.Setenv("HOME", home)
 	userDir := filepath.Join(home, ".glaw", "agents")
 	os.MkdirAll(userDir, 0o755)
+
+	// Create a user-level agent with the same name as a project-level one
+	// to show that project-level takes precedence.
 	userAgent := &agent.SubAgentConfig{
 		Name:        "shared-name",
 		Description: "User-level version",
@@ -117,7 +129,7 @@ func main() {
 		Prompt:      "User agent.",
 	}
 	check(agent.CreateSubAgentFile(userDir, userAgent))
-	fmt.Printf("\n  Created user-level agent: %s/shared-name.md\n", userDir)
+	fmt.Printf("  Created user-level agent: %s/shared-name.md\n", userDir)
 
 	// Also create a user-only agent (not overridden by project)
 	userOnlyAgent := &agent.SubAgentConfig{
@@ -129,11 +141,10 @@ func main() {
 	check(agent.CreateSubAgentFile(userDir, userOnlyAgent))
 	fmt.Printf("  Created user-level agent: %s/general-helper.md\n", userDir)
 
-	// ── 4. Project Overrides User ──────────────────────────────
-	section("4. Project-Level Overrides User-Level (LoadAllSubAgents)")
+	// LoadAllSubAgents shows project-level overrides user-level
 	all, err := agent.LoadAllSubAgents(workspace)
 	check(err)
-	fmt.Printf("  LoadAllSubAgents → %d total agents:\n", len(all))
+	fmt.Printf("\n  LoadAllSubAgents → %d total agents:\n", len(all))
 	for _, c := range all {
 		fmt.Printf("    %-15s level=%-8s desc=%q\n", c.Name, c.Level, c.Description)
 	}
@@ -187,9 +198,12 @@ func main() {
 	// ── 6. SubAgentOrchestrator Lifecycle ──────────────────────
 	section("6. SubAgentOrchestrator — Spawn, Wait, List, Get, Cancel")
 	agent.SetCustomConfigs(all)
-	reg := tools.NewRegistry(workspace)
+	reg := tools.NewRegistry(tmpDir)
 	specs := reg.GetToolSpecs()
 	orch := agent.NewSubAgentOrchestrator(reg, specs, "claude-sonnet-4-6")
+
+	// Wire the orchestrator into the registry so the sub_agent tool works.
+	reg.SetOrchestrator(orch)
 
 	task1, err := orch.SpawnTask(ctx, "Explore", "Find all Go files in the project")
 	check(err)
@@ -308,7 +322,7 @@ func main() {
 	fmt.Printf("  Unknown agent → isError: %v\n", out.IsError)
 
 	// ── 9. Spawn All Available Agents ──────────────────────────
-	section("9. Spawn All Available Agents (built-in + custom from disk)")
+	section("9. Spawn All Available Agents (built-in + custom from config files)")
 	agent.SetCustomConfigs(all)
 	agents := agent.AllAvailableAgents()
 	fmt.Printf("  Total agents available: %d\n\n", len(agents))
@@ -350,7 +364,7 @@ func main() {
 	check(err)
 	fmt.Printf("    ✓ %s\n", trunc(out.Content, 80))
 
-	fmt.Println("  Step 4: Review code (using disk-loaded reviewer agent)...")
+	fmt.Println("  Step 4: Review code (using config-file reviewer agent)...")
 	out, err = reg.ExecuteTool(ctx, "sub_agent", mustJSON(map[string]interface{}{
 		"agent_name": "reviewer", "prompt": "Review main.go for quality issues", "wait": true,
 	}))
@@ -378,7 +392,7 @@ func main() {
 	check(err)
 	fmt.Printf("    ✓ %s\n", trunc(out.Content, 80))
 
-	fmt.Println("  Step 8: Refactor (using disk-loaded go-expert agent)...")
+	fmt.Println("  Step 8: Refactor (using config-file go-expert agent)...")
 	out, err = reg.ExecuteTool(ctx, "sub_agent", mustJSON(map[string]interface{}{
 		"agent_name": "go-expert", "prompt": "Clean up code smells and improve Go style", "wait": true,
 	}))

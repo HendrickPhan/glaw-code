@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/hieu-glaw/glaw-code/internal/agent"
 	"github.com/hieu-glaw/glaw-code/internal/api"
 	"github.com/hieu-glaw/glaw-code/internal/cli"
 	"github.com/hieu-glaw/glaw-code/internal/config"
@@ -69,6 +70,7 @@ func main() {
 
 		runtimeFactory := func(sess *runtime.Session) (*runtime.ConversationRuntime, func(), error) {
 			toolRegistry := tools.NewRegistry(workspaceRoot)
+			setupSubAgents(toolRegistry, workspaceRoot, cfg.Model, client)
 			snapshotExec := runtime.NewSnapshottingExecutor(toolRegistry)
 			toolExec := runtime.NewCompositeToolExecutor(snapshotExec, mcpManager)
 			permManager := runtime.NewPermissionManager(cfg.PermissionMode, workspaceRoot)
@@ -183,6 +185,7 @@ func main() {
 
 	// Create tool executor (builtin tools + MCP)
 	toolRegistry := tools.NewRegistry(workspaceRoot)
+	setupSubAgents(toolRegistry, workspaceRoot, cfg.Model, client)
 	snapshotExec := runtime.NewSnapshottingExecutor(toolRegistry)
 	toolExec := runtime.NewCompositeToolExecutor(snapshotExec, mcpManager)
 
@@ -214,6 +217,12 @@ func main() {
 	} else if !noInput {
 		// Interactive REPL — signal handling is managed by the REPL itself
 		repl := cli.NewREPL(rt)
+
+		// Wire the agents provider for /agents command support
+		agentMgr := agent.NewManager(rt)
+		agentsProvider := agent.NewAgentsProviderAdapter(agentMgr)
+		repl.SetAgentsProvider(agentsProvider)
+
 		if err := repl.Run(ctx); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -243,4 +252,22 @@ func convertMCPConfigs(servers map[string]*config.MCPServerConfig) map[string]mc
 		}
 	}
 	return result
+}
+
+// setupSubAgents loads custom sub-agent configs from disk and wires the
+// orchestrator into the tool registry so the sub_agent tool works.
+func setupSubAgents(reg *tools.Registry, workspaceRoot string, model string, apiClient api.ProviderClient) {
+	// Load custom agent configs from .glaw/agents/ (project) and ~/.glaw/agents/ (user)
+	customAgents, err := agent.LoadAllSubAgents(workspaceRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: loading sub-agent configs: %v\n", err)
+	}
+	if len(customAgents) > 0 {
+		agent.SetCustomConfigs(customAgents)
+	}
+
+	// Create and wire the orchestrator (with API client for real LLM-backed execution)
+	specs := reg.GetToolSpecs()
+	orch := agent.NewSubAgentOrchestratorWithClient(reg, specs, model, apiClient)
+	reg.SetOrchestrator(orch)
 }

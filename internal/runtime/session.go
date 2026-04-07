@@ -845,6 +845,18 @@ func join(ss []string, sep string) string {
 	return result
 }
 
+// SubAgentSessionProvider is an interface for querying sub-agent session
+// information. It is implemented by agent.Manager and injected into the
+// ConversationRuntime to avoid a circular dependency between the runtime
+// and agent packages.
+type SubAgentSessionProvider interface {
+	// ListAgentStatuses returns metadata for every tracked sub-agent.
+	ListAgentStatuses() []commands.SubAgentSessionInfo
+	// LoadAgentSession loads the session file associated with an agent and
+	// returns its ID and message count.
+	LoadAgentSession(agentID string) (sessionID string, msgCount int, err error)
+}
+
 // ConversationRuntime is the central orchestrator.
 type ConversationRuntime struct {
 	APIClient    api.ProviderClient
@@ -855,6 +867,10 @@ type ConversationRuntime struct {
 	ToolExecutor ToolExecutor
 	Snapshotter  *SnapshottingExecutor
 	SystemPrompt string
+
+	// SubAgentMgr is the provider for sub-agent session data. It is injected
+	// from the outside (typically by the CLI layer) to break the import cycle.
+	SubAgentMgr SubAgentSessionProvider
 
 	// PermissionChecker is called before each tool execution.
 	// If it returns false, the tool is not executed and the message is
@@ -1336,3 +1352,35 @@ func (r *ConversationRuntime) SetConfigValue(key, value string) error {
 	return config.SaveProject(workspaceRoot, settings)
 }
 
+// GetSubAgentSessions returns metadata for all tracked sub-agents.
+func (r *ConversationRuntime) GetSubAgentSessions() []commands.SubAgentSessionInfo {
+	if r.SubAgentMgr == nil {
+		return nil
+	}
+	return r.SubAgentMgr.ListAgentStatuses()
+}
+
+// ResumeSubAgentSession saves the current session, loads the sub-agent's session, and resets the usage tracker.
+func (r *ConversationRuntime) ResumeSubAgentSession(agentID string) error {
+	if r.SubAgentMgr == nil {
+		return fmt.Errorf("no sub-agent manager configured")
+	}
+
+	sessionID, msgCount, err := r.SubAgentMgr.LoadAgentSession(agentID)
+	if err != nil {
+		return fmt.Errorf("resuming sub-agent %s: %w", agentID, err)
+	}
+
+	// Save current session before switching
+	workspaceRoot := r.GetWorkspaceRoot()
+	sessionsDir := filepath.Join(workspaceRoot, ".glaw", "sessions")
+	if r.Session.ID != "" {
+		_, _ = SaveSession(r.Session, sessionsDir)
+	}
+
+	// The session was already loaded by the manager; just update the runtime
+	_ = sessionID
+	_ = msgCount
+	r.Usage = NewUsageTracker()
+	return nil
+}

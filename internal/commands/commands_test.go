@@ -46,6 +46,11 @@ func (m *mockRuntime) RevertLastTurn() (int, error)            { return 0, nil }
 func (m *mockRuntime) RevertAll() (int, error)                 { return 0, nil }
 func (m *mockRuntime) LoadSession(sessionID string) error      { m.sessionID = sessionID; return nil }
 func (m *mockRuntime) NewSession()                              { m.sessionID = "sess_new"; m.msgCount = 0 }
+func (m *mockRuntime) GetSubAgentSessions() []SubAgentSessionInfo { return nil }
+func (m *mockRuntime) ResumeSubAgentSession(agentID string) error {
+	m.sessionID = agentID
+	return nil
+}
 
 func newMockRuntime() *mockRuntime {
 	return &mockRuntime{
@@ -333,6 +338,62 @@ func TestLevenshtein(t *testing.T) {
 		got := levenshtein(tt.a, tt.b)
 		if got != tt.want {
 			t.Errorf("levenshtein(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
+		}
+	}
+}
+
+func TestParseQuotedFields(t *testing.T) {
+	tests := []struct {
+		input string
+		want  []string
+	}{
+		{
+			input: `create my-agent --desc "hello world" --tools read_file,bash`,
+			want:  []string{"create", "my-agent", "--desc", "hello world", "--tools", "read_file,bash"},
+		},
+		{
+			input: `show Explore`,
+			want:  []string{"show", "Explore"},
+		},
+		{
+			input: `call Explore "Search for all error handling patterns"`,
+			want:  []string{"call", "Explore", "Search for all error handling patterns"},
+		},
+		{
+			input: `delete my-agent --user`,
+			want:  []string{"delete", "my-agent", "--user"},
+		},
+		{
+			input: "",
+			want:  nil,
+		},
+		{
+			input: `   `,
+			want:  nil,
+		},
+		{
+			input: `single`,
+			want:  []string{"single"},
+		},
+		{
+			input: `edit my-agent --desc 'new description here'`,
+			want:  []string{"edit", "my-agent", "--desc", "new description here"},
+		},
+		{
+			input: `create agent --desc "it's a test" --model sonnet`,
+			want:  []string{"create", "agent", "--desc", "it's a test", "--model", "sonnet"},
+		},
+	}
+	for _, tt := range tests {
+		got := parseQuotedFields(tt.input)
+		if len(got) != len(tt.want) {
+			t.Errorf("parseQuotedFields(%q) = %v, want %v", tt.input, got, tt.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tt.want[i] {
+				t.Errorf("parseQuotedFields(%q)[%d] = %q, want %q", tt.input, i, got[i], tt.want[i])
+			}
 		}
 	}
 }

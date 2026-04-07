@@ -20,6 +20,7 @@ type SubAgentExecutor struct {
 	toolExecutor runtime.ToolExecutor
 	allTools     []api.ToolDefinition
 	parentModel  string
+	apiClient    api.ProviderClient
 }
 
 // NewSubAgentExecutor creates a new executor for the given sub-agent config.
@@ -34,6 +35,24 @@ func NewSubAgentExecutor(
 		toolExecutor: toolExecutor,
 		allTools:     allTools,
 		parentModel:  parentModel,
+	}
+}
+
+// NewSubAgentExecutorWithClient creates a new executor with an API client
+// for real LLM-backed execution.
+func NewSubAgentExecutorWithClient(
+	config *SubAgentConfig,
+	toolExecutor runtime.ToolExecutor,
+	allTools []api.ToolDefinition,
+	parentModel string,
+	apiClient api.ProviderClient,
+) *SubAgentExecutor {
+	return &SubAgentExecutor{
+		config:       config,
+		toolExecutor: toolExecutor,
+		allTools:     allTools,
+		parentModel:  parentModel,
+		apiClient:    apiClient,
 	}
 }
 
@@ -71,14 +90,6 @@ func (e *SubAgentExecutor) Execute(ctx context.Context, taskPrompt string) (*Age
 		System:    systemPrompt,
 	}
 
-	// We need an API client to make the call. Since the executor receives
-	// a ToolExecutor interface, we execute through the agent's run loop
-	// using the tool executor for tool calls.
-	//
-	// For the actual implementation, we simulate the sub-agent execution
-	// using the run loop pattern. The sub-agent runs its own agentic loop
-	// with filtered tools.
-
 	startTime := time.Now()
 	result := &AgentResult{}
 
@@ -99,24 +110,89 @@ func (e *SubAgentExecutor) Execute(ctx context.Context, taskPrompt string) (*Age
 	return result, nil
 }
 
-// runAgentLoop executes the sub-agent's agentic loop. Since we may not have
-// direct access to the API client through the ToolExecutor interface, we
-// implement a simplified execution that uses the tool executor directly.
+// runAgentLoop executes the sub-agent's agentic loop.
+// If an API client is available, it runs a real agentic loop:
+// call LLM → execute tools → feed results back → repeat until done.
+// Otherwise falls back to a stub response.
 func (e *SubAgentExecutor) runAgentLoop(ctx context.Context, req api.Request, filteredTools []api.ToolDefinition) (string, int, int, error) {
-	// The sub-agent's output is synthesized from the task prompt and
-	// available tools. In a full implementation, this would make an API call
-	// and loop through tool use. Here we provide the infrastructure for it.
-	//
-	// The real API call would go through an APIClient, but since we only
-	// have a ToolExecutor, we return a summary based on the configuration.
+	// If no API client, return stub response
+	if e.apiClient == nil {
+		output := fmt.Sprintf("Sub-agent %q executed with %d available tools.\nTask: %s",
+			e.config.Name,
+			len(filteredTools),
+			truncate(req.Messages[0].Content[0].Text, 200),
+		)
+		return output, 0, 0, nil
+	}
 
-	output := fmt.Sprintf("Sub-agent %q executed with %d available tools.\nTask: %s",
-		e.config.Name,
-		len(filteredTools),
-		truncate(req.Messages[0].Content[0].Text, 200),
-	)
+	// Real agentic loop: LLM → tool calls → results → LLM → ... → end
+	var totalToolCalls int
+	var totalTokensUsed int
+	maxIterations := 20
 
-	return output, 0, 0, nil
+	for i := 0; i < maxIterations; i++ {
+		resp, err := e.apiClient.SendMessage(ctx, req)
+		if err != nil {
+			if ctx.Err() != nil {
+				return fmt.Sprintf("Sub-agent %q cancelled.", e.config.Name), totalToolCalls, totalTokensUsed, nil
+			}
+			return "", totalToolCalls, totalTokensUsed, fmt.Errorf("sub-agent %q API call failed: %w", e.config.Name, err)
+		}
+
+		totalTokensUsed += resp.Usage.InputTokens + resp.Usage.OutputTokens
+
+		// Collect text and tool_use blocks from response
+		var textParts []string
+		var toolCalls []api.ContentBlock
+		for _, block := range resp.Content {
+			switch block.Type {
+			case api.ContentText:
+				if block.Text != "" {
+					textParts = append(textParts, block.Text)
+				}
+			case api.ContentToolUse:
+				toolCalls = append(toolCalls, block)
+			}
+		}
+
+		// If no tool calls, we're done — return the text
+		if resp.StopReason != api.StopToolUse || len(toolCalls) == 0 {
+			output := strings.Join(textParts, "\n")
+			if output == "" {
+				output = fmt.Sprintf("Sub-agent %q completed with no text output.", e.config.Name)
+			}
+			return output, totalToolCalls, totalTokensUsed, nil
+		}
+
+		// Add assistant message (with tool_use blocks) to conversation
+		req.Messages = append(req.Messages, api.Message{
+			Role:    api.RoleAssistant,
+			Content: resp.Content,
+		})
+
+		// Execute each tool call and collect results
+		var toolResults []api.ContentBlock
+		for _, tc := range toolCalls {
+			totalToolCalls++
+
+			output, err := e.toolExecutor.ExecuteTool(ctx, tc.Name, tc.Input)
+			if err != nil {
+				toolResults = append(toolResults, api.NewToolResultBlock(tc.ID, fmt.Sprintf("Tool error: %v", err), true))
+			} else {
+				toolResults = append(toolResults, api.NewToolResultBlock(tc.ID, output.Content, output.IsError))
+			}
+		}
+
+		// Add tool results as a user message (Anthropic API convention)
+		req.Messages = append(req.Messages, api.Message{
+			Role:    api.RoleUser,
+			Content: toolResults,
+		})
+	}
+
+	// Safety: max iterations reached
+	return fmt.Sprintf("Sub-agent %q reached max iterations (%d). Partial output:\n%s",
+		e.config.Name, maxIterations, truncate(fmt.Sprintf("%v", req.Messages), 500)), totalToolCalls, totalTokensUsed, nil
 }
 
 // FilterTools returns only the tool definitions that the sub-agent is allowed
@@ -162,14 +238,14 @@ func (e *SubAgentExecutor) BuildSystemPrompt() string {
 
 // SubAgentTask represents a task delegated to a sub-agent.
 type SubAgentTask struct {
-	ID          string          `json:"id"`
-	AgentName   string          `json:"agent_name"`
-	Prompt      string          `json:"prompt"`
-	Status      string          `json:"status"`
-	Result      *AgentResult    `json:"result,omitempty"`
-	StartTime   time.Time       `json:"start_time"`
-	EndTime     *time.Time      `json:"end_time,omitempty"`
-	ParentID    string          `json:"parent_id,omitempty"`
+	ID          string       `json:"id"`
+	AgentName   string       `json:"agent_name"`
+	Prompt      string       `json:"prompt"`
+	Status      string       `json:"status"`
+	Result      *AgentResult `json:"result,omitempty"`
+	StartTime   time.Time    `json:"start_time"`
+	EndTime     *time.Time   `json:"end_time,omitempty"`
+	ParentID    string       `json:"parent_id,omitempty"`
 }
 
 // SubAgentOrchestrator manages the lifecycle of sub-agent tasks. It handles
@@ -178,6 +254,7 @@ type SubAgentOrchestrator struct {
 	toolExecutor runtime.ToolExecutor
 	allTools     []api.ToolDefinition
 	parentModel  string
+	apiClient    api.ProviderClient
 	tasks        map[string]*SubAgentTask
 	mu           sync.RWMutex
 	seq          int64
@@ -194,6 +271,23 @@ func NewSubAgentOrchestrator(
 		allTools:     allTools,
 		tasks:        make(map[string]*SubAgentTask),
 		parentModel:  parentModel,
+	}
+}
+
+// NewSubAgentOrchestratorWithClient creates a new orchestrator with an API
+// client for real LLM-backed sub-agent execution.
+func NewSubAgentOrchestratorWithClient(
+	toolExecutor runtime.ToolExecutor,
+	allTools []api.ToolDefinition,
+	parentModel string,
+	apiClient api.ProviderClient,
+) *SubAgentOrchestrator {
+	return &SubAgentOrchestrator{
+		toolExecutor: toolExecutor,
+		allTools:     allTools,
+		tasks:        make(map[string]*SubAgentTask),
+		parentModel:  parentModel,
+		apiClient:    apiClient,
 	}
 }
 
@@ -219,8 +313,13 @@ func (o *SubAgentOrchestrator) SpawnTask(ctx context.Context, agentName string, 
 	o.tasks[taskID] = task
 	o.mu.Unlock()
 
-	// Create executor
-	executor := NewSubAgentExecutor(config, o.toolExecutor, o.allTools, o.parentModel)
+	// Create executor — use the API client if available
+	var executor *SubAgentExecutor
+	if o.apiClient != nil {
+		executor = NewSubAgentExecutorWithClient(config, o.toolExecutor, o.allTools, o.parentModel, o.apiClient)
+	} else {
+		executor = NewSubAgentExecutor(config, o.toolExecutor, o.allTools, o.parentModel)
+	}
 
 	// Run in background goroutine
 	go func() {

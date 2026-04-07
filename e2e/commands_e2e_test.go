@@ -1,8 +1,10 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,6 +74,11 @@ func (m *mockRuntimeFS) RevertLastTurn() (int, error)            { return 0, nil
 func (m *mockRuntimeFS) RevertAll() (int, error)                 { return 0, nil }
 func (m *mockRuntimeFS) LoadSession(sessionID string) error      { m.sessionID = sessionID; return nil }
 func (m *mockRuntimeFS) NewSession()                              { m.sessionID = "sess_new"; m.msgCount = 0 }
+func (m *mockRuntimeFS) GetSubAgentSessions() []commands.SubAgentSessionInfo { return nil }
+func (m *mockRuntimeFS) ResumeSubAgentSession(agentID string) error {
+	m.sessionID = agentID
+	return nil
+}
 
 func handleCmd(t *testing.T, d *commands.Dispatcher, input string) *commands.Result {
 	t.Helper()
@@ -504,14 +511,371 @@ func TestE2ECmdSkillsList(t *testing.T) {
 
 func TestE2ECmdAgentsList(t *testing.T) {
 	d := commands.NewDispatcher(newMockRuntimeFS(t.TempDir()))
+	d.SetAgentsProvider(&agentAgentsProviderStub{})
 	result := handleCmd(t, d, "/agents")
 
-	wantAgents := []string{"general-purpose", "Explore", "Plan"}
+	wantAgents := []string{"general-purpose", "Explore", "Plan", "Verification", "code-reviewer", "security-auditor", "test-writer", "docs-writer", "refactorer"}
 	for _, agent := range wantAgents {
 		if !strings.Contains(result.Message, agent) {
 			t.Errorf("agents missing %q: %s", agent, result.Message)
 		}
 	}
+}
+
+func TestE2ECmdAgentsListSubcommand(t *testing.T) {
+	d := commands.NewDispatcher(newMockRuntimeFS(t.TempDir()))
+	d.SetAgentsProvider(&agentAgentsProviderStub{})
+	result := handleCmd(t, d, "/agents list")
+
+	wantAgents := []string{"general-purpose", "Explore", "Plan"}
+	for _, agent := range wantAgents {
+		if !strings.Contains(result.Message, agent) {
+			t.Errorf("agents list missing %q: %s", agent, result.Message)
+		}
+	}
+}
+
+func TestE2ECmdAgentsShow(t *testing.T) {
+	d := commands.NewDispatcher(newMockRuntimeFS(t.TempDir()))
+	d.SetAgentsProvider(&agentAgentsProviderStub{})
+
+	// Show built-in agent
+	result := handleCmd(t, d, "/agents show Explore")
+	if !strings.Contains(result.Message, "Explore") {
+		t.Errorf("show Explore: %q", result.Message)
+	}
+	if !strings.Contains(result.Message, "builtin") {
+		t.Errorf("show should show source: %q", result.Message)
+	}
+
+	// Show non-existent agent
+	result = handleCmd(t, d, "/agents show nonexistent")
+	if !strings.Contains(result.Message, "not found") {
+		t.Errorf("show nonexistent: %q", result.Message)
+	}
+}
+
+func TestE2ECmdAgentsShowNoName(t *testing.T) {
+	d := commands.NewDispatcher(newMockRuntimeFS(t.TempDir()))
+	d.SetAgentsProvider(&agentAgentsProviderStub{})
+	result := handleCmd(t, d, "/agents show")
+	if !strings.Contains(result.Message, "Usage") {
+		t.Errorf("show no name: %q", result.Message)
+	}
+}
+
+func TestE2ECmdAgentsCreate(t *testing.T) {
+	dir := t.TempDir()
+	agentsDir := filepath.Join(dir, ".glaw", "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, dir)
+
+	d := commands.NewDispatcher(newMockRuntimeFS(dir))
+	d.SetAgentsProvider(&agentAgentsProviderStub{})
+	result := handleCmd(t, d, "/agents create my-test-agent --desc \"A test agent\" --tools read_file,bash --model sonnet")
+
+	if !strings.Contains(result.Message, "created successfully") {
+		t.Errorf("create: %q", result.Message)
+	}
+	if !strings.Contains(result.Message, "my-test-agent") {
+		t.Errorf("create should mention agent name: %q", result.Message)
+	}
+
+	// Verify file was created
+	agentFile := filepath.Join(agentsDir, "my-test-agent.md")
+	if _, err := os.Stat(agentFile); os.IsNotExist(err) {
+		t.Error("agent file should be created")
+	}
+}
+
+func TestE2ECmdAgentsCreateNoName(t *testing.T) {
+	d := commands.NewDispatcher(newMockRuntimeFS(t.TempDir()))
+	d.SetAgentsProvider(&agentAgentsProviderStub{})
+	result := handleCmd(t, d, "/agents create")
+	if !strings.Contains(result.Message, "Usage") && !strings.Contains(result.Message, "Options") {
+		t.Errorf("create no name: %q", result.Message)
+	}
+}
+
+func TestE2ECmdAgentsDelete(t *testing.T) {
+	dir := t.TempDir()
+	agentsDir := filepath.Join(dir, ".glaw", "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Create an agent file to delete
+	agentFile := filepath.Join(agentsDir, "to-delete.md")
+	if err := os.WriteFile(agentFile, []byte("---\nname: to-delete\ndescription: test\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, dir)
+
+	d := commands.NewDispatcher(newMockRuntimeFS(dir))
+	d.SetAgentsProvider(&agentAgentsProviderStub{})
+	result := handleCmd(t, d, "/agents delete to-delete")
+
+	if !strings.Contains(result.Message, "deleted") {
+		t.Errorf("delete: %q", result.Message)
+	}
+
+	// Verify file was removed
+	if _, err := os.Stat(agentFile); !os.IsNotExist(err) {
+		t.Error("agent file should be deleted")
+	}
+}
+
+func TestE2ECmdAgentsDeleteBuiltin(t *testing.T) {
+	d := commands.NewDispatcher(newMockRuntimeFS(t.TempDir()))
+	d.SetAgentsProvider(&agentAgentsProviderStub{})
+	result := handleCmd(t, d, "/agents delete Explore")
+
+	if !strings.Contains(result.Message, "built-in") || !strings.Contains(result.Message, "cannot be deleted") {
+		t.Errorf("delete builtin should be prevented: %q", result.Message)
+	}
+}
+
+func TestE2ECmdAgentsCallNoArgs(t *testing.T) {
+	d := commands.NewDispatcher(newMockRuntimeFS(t.TempDir()))
+	d.SetAgentsProvider(&agentAgentsProviderStub{})
+	result := handleCmd(t, d, "/agents call")
+	if !strings.Contains(result.Message, "Usage") {
+		t.Errorf("call no args: %q", result.Message)
+	}
+}
+
+func TestE2ECmdAgentsNoProvider(t *testing.T) {
+	d := commands.NewDispatcher(newMockRuntimeFS(t.TempDir()))
+	result := handleCmd(t, d, "/agents")
+	if !strings.Contains(result.Message, "No agent provider configured") {
+		t.Errorf("agents without provider: %q", result.Message)
+	}
+}
+
+func TestE2ECmdAgentsUnknownSubcommand(t *testing.T) {
+	d := commands.NewDispatcher(newMockRuntimeFS(t.TempDir()))
+	d.SetAgentsProvider(&agentAgentsProviderStub{})
+	result := handleCmd(t, d, "/agents foobar")
+	if !strings.Contains(result.Message, "Agent Management") {
+		t.Errorf("unknown subcommand should show help: %q", result.Message)
+	}
+}
+
+func TestE2ECmdAgentsCreateWithQuotedDescription(t *testing.T) {
+	dir := t.TempDir()
+	agentsDir := filepath.Join(dir, ".glaw", "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, dir)
+
+	d := commands.NewDispatcher(newMockRuntimeFS(dir))
+	d.SetAgentsProvider(&agentAgentsProviderStub{})
+
+	// Test quoted description
+	result := handleCmd(t, d, `/agents create quoted-agent --desc "This is a quoted description" --tools read_file,bash --model sonnet`)
+	if !strings.Contains(result.Message, "created successfully") {
+		t.Errorf("create with quoted desc: %q", result.Message)
+	}
+	if !strings.Contains(result.Message, "This is a quoted description") {
+		t.Errorf("should preserve full description: %q", result.Message)
+	}
+
+	// Verify file contents
+	data, err := os.ReadFile(filepath.Join(agentsDir, "quoted-agent.md"))
+	if err != nil {
+		t.Fatalf("agent file not created: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "This is a quoted description") {
+		t.Errorf("file should contain full description: %q", content)
+	}
+	if !strings.Contains(content, "tools: read_file, bash") {
+		t.Errorf("file should contain tools: %q", content)
+	}
+	if !strings.Contains(content, "model: sonnet") {
+		t.Errorf("file should contain model: %q", content)
+	}
+}
+
+func TestE2ECmdAgentsCallWithQuotedPrompt(t *testing.T) {
+	d := commands.NewDispatcher(newMockRuntimeFS(t.TempDir()))
+	d.SetAgentsProvider(&agentAgentsProviderStub{})
+
+	// Test /agents call with a quoted prompt
+	result := handleCmd(t, d, `/agents call Explore "Search for all error handling patterns"`)
+	if !strings.Contains(result.Message, "Explore") {
+		t.Errorf("call result should mention agent name: %q", result.Message)
+	}
+	if !strings.Contains(result.Message, "Search for all error handling patterns") {
+		t.Errorf("call result should include prompt: %q", result.Message)
+	}
+}
+
+func TestE2ECmdAgentsEditWorkflow(t *testing.T) {
+	dir := t.TempDir()
+	agentsDir := filepath.Join(dir, ".glaw", "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Create an agent to edit
+	agentContent := "---\nname: edit-me\ndescription: Original desc\ntools: read_file\nmodel: inherit\n---\n\nOriginal prompt.\n"
+	if err := os.WriteFile(filepath.Join(agentsDir, "edit-me.md"), []byte(agentContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, dir)
+
+	d := commands.NewDispatcher(newMockRuntimeFS(dir))
+	d.SetAgentsProvider(&agentAgentsProviderStub{})
+
+	// Verify original agent shows up
+	result := handleCmd(t, d, "/agents show edit-me")
+	if !strings.Contains(result.Message, "Original desc") {
+		t.Errorf("show before edit: %q", result.Message)
+	}
+
+	// Edit the agent
+	result = handleCmd(t, d, `/agents edit edit-me --desc "Updated description" --model sonnet`)
+	if !strings.Contains(result.Message, "updated successfully") {
+		t.Errorf("edit: %q", result.Message)
+	}
+
+	// Verify updated description in show
+	result = handleCmd(t, d, "/agents show edit-me")
+	if !strings.Contains(result.Message, "Updated description") {
+		t.Errorf("show after edit should have new desc: %q", result.Message)
+	}
+
+	// Verify the file on disk has the correct content
+	data, err := os.ReadFile(filepath.Join(agentsDir, "edit-me.md"))
+	if err != nil {
+		t.Fatalf("agent file not found after edit: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "Updated description") {
+		t.Errorf("file should have new description: %q", content)
+	}
+	if !strings.Contains(content, "model: sonnet") {
+		t.Errorf("file should have model sonnet: %q", content)
+	}
+}
+
+func TestE2ECmdAgentsLsAlias(t *testing.T) {
+	d := commands.NewDispatcher(newMockRuntimeFS(t.TempDir()))
+	d.SetAgentsProvider(&agentAgentsProviderStub{})
+	result := handleCmd(t, d, "/agents ls")
+	if !strings.Contains(result.Message, "Available Agents") {
+		t.Errorf("/agents ls should list agents: %q", result.Message)
+	}
+}
+
+func TestE2ECmdAgentsShowInfoAlias(t *testing.T) {
+	d := commands.NewDispatcher(newMockRuntimeFS(t.TempDir()))
+	d.SetAgentsProvider(&agentAgentsProviderStub{})
+	result := handleCmd(t, d, "/agents info Explore")
+	if !strings.Contains(result.Message, "Explore") {
+		t.Errorf("/agents info: %q", result.Message)
+	}
+}
+
+// agentAgentsProviderStub is a test stub for commands.AgentsProvider
+// that returns the same built-in agents as the real adapter.
+// It also reads/writes agent files from disk for create/delete/get operations.
+type agentAgentsProviderStub struct{}
+
+func (a *agentAgentsProviderStub) ListAgents(workspaceRoot string) ([]commands.AgentInfo, error) {
+	result := []commands.AgentInfo{
+		{Name: "Explore", Description: "Fast agent for exploring codebases", Source: "builtin", Tools: []string{"read_file", "glob_search", "grep_search"}, Model: "inherit"},
+		{Name: "Plan", Description: "Software architect agent", Source: "builtin", Tools: []string{"read_file", "glob_search", "grep_search", "todo_write"}, Model: "inherit"},
+		{Name: "Verification", Description: "Test runner agent", Source: "builtin", Tools: []string{"read_file", "glob_search", "grep_search", "bash"}, Model: "inherit"},
+		{Name: "code-reviewer", Description: "Code review agent", Source: "builtin", Tools: []string{"read_file", "glob_search", "grep_search"}, Model: "inherit"},
+		{Name: "security-auditor", Description: "Security audit agent", Source: "builtin", Tools: []string{"read_file", "glob_search", "grep_search"}, Model: "inherit"},
+		{Name: "test-writer", Description: "Test writing agent", Source: "builtin", Tools: []string{"read_file", "write_file", "edit_file", "bash"}, Model: "inherit"},
+		{Name: "docs-writer", Description: "Documentation agent", Source: "builtin", Tools: []string{"read_file", "write_file", "edit_file"}, Model: "inherit"},
+		{Name: "refactorer", Description: "Code refactoring agent", Source: "builtin", Tools: []string{"read_file", "write_file", "edit_file", "bash"}, Model: "inherit"},
+		{Name: "general-purpose", Description: "General-purpose agent", Source: "builtin", Tools: []string{"bash", "read_file", "write_file", "edit_file"}, Model: "inherit"},
+	}
+
+	// Also load custom agents from disk
+	if workspaceRoot != "" {
+		agentsDir := filepath.Join(workspaceRoot, ".glaw", "agents")
+		if entries, err := os.ReadDir(agentsDir); err == nil {
+			for _, e := range entries {
+				if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+					continue
+				}
+				name := strings.TrimSuffix(e.Name(), ".md")
+				data, err := os.ReadFile(filepath.Join(agentsDir, e.Name()))
+				if err != nil {
+					continue
+				}
+				// Simple parsing of frontmatter for description
+				desc := "Custom agent"
+				lines := strings.Split(string(data), "\n")
+				for _, line := range lines {
+					if strings.HasPrefix(line, "description:") {
+						desc = strings.TrimSpace(strings.TrimPrefix(line, "description:"))
+						break
+					}
+				}
+				result = append(result, commands.AgentInfo{
+					Name:        name,
+					Description: desc,
+					Source:      "project",
+				})
+			}
+		}
+	}
+
+	return result, nil
+}
+
+func (a *agentAgentsProviderStub) GetAgent(workspaceRoot, name string) (*commands.AgentInfo, error) {
+	// Check built-in first
+	agents, _ := a.ListAgents(workspaceRoot)
+	for i := range agents {
+		if agents[i].Name == name {
+			return &agents[i], nil
+		}
+	}
+	return nil, fmt.Errorf("agent %q not found", name)
+}
+
+func (a *agentAgentsProviderStub) CreateAgent(workspaceRoot, name, description, scope string, tools []string, model, prompt string) error {
+	dir := filepath.Join(workspaceRoot, ".glaw", "agents")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+
+	var buf bytes.Buffer
+	buf.WriteString("---\n")
+	buf.WriteString(fmt.Sprintf("name: %s\n", name))
+	buf.WriteString(fmt.Sprintf("description: %s\n", description))
+	if len(tools) > 0 {
+		buf.WriteString(fmt.Sprintf("tools: %s\n", strings.Join(tools, ", ")))
+	}
+	if model != "" {
+		buf.WriteString(fmt.Sprintf("model: %s\n", model))
+	}
+	buf.WriteString("---\n\n")
+	buf.WriteString(prompt)
+	buf.WriteString("\n")
+
+	return os.WriteFile(filepath.Join(dir, name+".md"), buf.Bytes(), 0o644)
+}
+
+func (a *agentAgentsProviderStub) DeleteAgent(workspaceRoot, name, scope string) error {
+	path := filepath.Join(workspaceRoot, ".glaw", "agents", name+".md")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return fmt.Errorf("agent %q not found", name)
+	}
+	return os.Remove(path)
+}
+
+func (a *agentAgentsProviderStub) CallAgent(ctx context.Context, name, prompt string) (string, error) {
+	// Stub: return a mock response
+	return fmt.Sprintf("Agent %q executed with prompt: %s", name, prompt), nil
 }
 
 // --- Bughunter ---

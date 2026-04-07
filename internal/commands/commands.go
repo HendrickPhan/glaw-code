@@ -40,6 +40,35 @@ type Result struct {
 	Message string
 }
 
+// AgentInfo holds descriptive information about an available agent.
+type AgentInfo struct {
+	Name        string
+	Description string
+	Source      string // "builtin", "project", "user"
+	Tools       []string
+	Model       string
+	Prompt      string
+}
+
+// SubAgentSessionInfo holds metadata about a sub-agent's session for listing.
+type SubAgentSessionInfo struct {
+	AgentID   string `json:"agent_id"`
+	AgentType string `json:"agent_type"`
+	Status    string `json:"status"`
+	SessionID string `json:"session_id"`
+	Prompt    string `json:"prompt"`
+}
+
+// AgentsProvider is the interface for resolving and managing agents without
+// importing the agent package (which would create an import cycle via runtime).
+type AgentsProvider interface {
+	ListAgents(workspaceRoot string) ([]AgentInfo, error)
+	GetAgent(workspaceRoot, name string) (*AgentInfo, error)
+	CreateAgent(workspaceRoot, name, description, scope string, tools []string, model, prompt string) error
+	DeleteAgent(workspaceRoot, name, scope string) error
+	CallAgent(ctx context.Context, name, prompt string) (string, error)
+}
+
 // Runtime provides the interface commands need.
 type Runtime interface {
 	GetModel() string
@@ -61,6 +90,9 @@ type Runtime interface {
 	SetConfigValue(key, value string) error
 	RevertLastTurn() (int, error)
 	RevertAll() (int, error)
+	// Sub-agent context support
+	GetSubAgentSessions() []SubAgentSessionInfo
+	ResumeSubAgentSession(agentID string) error
 }
 
 // UsageInfo holds usage statistics.
@@ -96,9 +128,9 @@ var Specs = []Spec{
 	{Name: "teleport", Summary: "Remote session teleport", ArgumentHint: "<host:port>", Category: CategoryCore},
 	{Name: "debug-tool-call", Summary: "Debug tool call tracing", ArgumentHint: "[on|off]", Category: CategoryCore},
 	{Name: "export", Summary: "Export session data", ArgumentHint: "[filename]", Category: CategorySession},
-	{Name: "session", Summary: "Session management", ArgumentHint: "[list|load|new|delete]", Category: CategorySession},
+	{Name: "session", Summary: "Session management", ArgumentHint: "[list|load|new|delete|resume]", Category: CategorySession},
 	{Name: "plugin", Summary: "Plugin management", ArgumentHint: "[install|enable|disable|list]", Category: CategoryCore},
-	{Name: "agents", Summary: "List available agents", Category: CategoryCore},
+	{Name: "agents", Summary: "Agent management", ArgumentHint: "[list|show|create|call|edit|delete] [args]", Category: CategoryCore},
 	{Name: "skills", Summary: "List available skills", Category: CategoryCore},
 	{Name: "btw", Summary: "Ask a side question during execution", ArgumentHint: "<question>", Category: CategoryCore},
 	{Name: "tasks", Summary: "Manage agent tasks", ArgumentHint: "[create|list|update|delete] [args]", Category: CategoryCore},
@@ -165,8 +197,9 @@ func SuggestCommands(input string) []Spec {
 
 // Dispatcher handles slash command dispatch.
 type Dispatcher struct {
-	runtime   Runtime
-	taskStore *tasks.Store
+	runtime        Runtime
+	taskStore      *tasks.Store
+	agentsProvider AgentsProvider
 }
 
 // NewDispatcher creates a new command dispatcher.
@@ -179,6 +212,12 @@ func NewDispatcher(rt Runtime) *Dispatcher {
 		runtime:   rt,
 		taskStore: tasks.NewStore(taskPath),
 	}
+}
+
+// SetAgentsProvider sets the provider used to resolve available agents.
+// This must be called before /agents is used if dynamic agent loading is desired.
+func (d *Dispatcher) SetAgentsProvider(p AgentsProvider) {
+	d.agentsProvider = p
 }
 
 // Handle parses and dispatches a slash command.
@@ -248,7 +287,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, cmd *ParsedCommand) (*Result,
 	case "plugin":
 		return d.handlePlugin(cmd.Remainder)
 	case "agents":
-		return d.handleAgents()
+		return d.handleAgents(cmd.Remainder)
 	case "skills":
 		return d.handleSkills()
 	case "bughunter":
@@ -288,7 +327,7 @@ func (d *Dispatcher) handleHelp() (*Result, error) {
 
 	categories := []Category{CategoryCore, CategoryWorkspace, CategorySession, CategoryGit, CategoryAutomation}
 	for _, cat := range categories {
-		sb.WriteString(fmt.Sprintf("  %s:\n", strings.ToUpper(string(cat[:1])) + string(cat[1:])))
+		sb.WriteString(fmt.Sprintf("  %s:\n", strings.ToUpper(string(cat[:1]))+string(cat[1:])))
 		for _, spec := range Specs {
 			if spec.Category == cat {
 				aliases := ""
@@ -574,24 +613,57 @@ func (d *Dispatcher) handleMemory(remainder string) (*Result, error) {
 
 func (d *Dispatcher) handleResume(remainder string) (*Result, error) {
 	if remainder == "" {
+		// Show available sessions and sub-agent sessions
+		var sb strings.Builder
+
+		// List regular sessions
 		sessionsDir := filepath.Join(".glaw", "sessions")
 		entries, err := os.ReadDir(sessionsDir)
 		if err != nil {
-			return &Result{Action: "continue", Message: "No sessions found. Usage: /resume <session-id>"}, nil
-		}
-		var sessions []string
-		for _, e := range entries {
-			if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
-				name := strings.TrimSuffix(e.Name(), ".json")
-				sessions = append(sessions, "  "+name)
+			sb.WriteString("No regular sessions found.")
+		} else {
+			var sessions []string
+			for _, e := range entries {
+				if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
+					name := strings.TrimSuffix(e.Name(), ".json")
+					sessions = append(sessions, "  "+name)
+				}
+			}
+			if len(sessions) == 0 {
+				sb.WriteString("No saved sessions found.")
+			} else {
+				sb.WriteString("Available sessions:\n")
+				sb.WriteString(strings.Join(sessions, "\n"))
 			}
 		}
-		if len(sessions) == 0 {
-			return &Result{Action: "continue", Message: "No saved sessions found."}, nil
+
+		// List sub-agent sessions
+		subAgentSessions := d.runtime.GetSubAgentSessions()
+		if len(subAgentSessions) > 0 {
+			sb.WriteString(fmt.Sprintf("\n\nSub-agent sessions (%d):\n", len(subAgentSessions)))
+			for _, sa := range subAgentSessions {
+				prompt := sa.Prompt
+				if len(prompt) > 60 {
+					prompt = prompt[:57] + "..."
+				}
+				sb.WriteString(fmt.Sprintf("  agent:%s  [%s] %-16s %s\n", sa.AgentID, sa.Status, sa.AgentType, prompt))
+			}
 		}
-		return &Result{Action: "continue", Message: "Available sessions:\n" + strings.Join(sessions, "\n") + "\n\nUsage: /resume <session-id>"}, nil
+
+		sb.WriteString("\n\nUsage: /resume <session-id> | /resume agent:<agent-id>")
+		return &Result{Action: "continue", Message: sb.String()}, nil
 	}
-	// Use the new in-REPL session switching
+
+	// Check if resuming a sub-agent context
+	if strings.HasPrefix(remainder, "agent:") {
+		agentID := strings.TrimPrefix(remainder, "agent:")
+		if err := d.runtime.ResumeSubAgentSession(agentID); err != nil {
+			return &Result{Action: "continue", Message: "Failed to resume sub-agent: " + err.Error()}, nil
+		}
+		return &Result{Action: "continue", Message: fmt.Sprintf("Resumed sub-agent context: %s (%d messages loaded).", agentID, d.runtime.GetMessageCount())}, nil
+	}
+
+	// Use the in-REPL session switching
 	if err := d.runtime.LoadSession(remainder); err != nil {
 		return &Result{Action: "continue", Message: "Failed to resume session: " + err.Error()}, nil
 	}
@@ -603,7 +675,26 @@ func (d *Dispatcher) handleResume(remainder string) (*Result, error) {
 func (d *Dispatcher) handleSession(remainder string) (*Result, error) {
 	parts := strings.Fields(remainder)
 	if len(parts) == 0 {
-		return &Result{Action: "continue", Message: fmt.Sprintf("Current session: %s\nMessages: %d\n\nUsage: /session [list|load|new|delete] [session-id]", d.runtime.GetSessionID(), d.runtime.GetMessageCount())}, nil
+		// Show current session info plus sub-agent sessions
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("Current session: %s\nMessages: %d", d.runtime.GetSessionID(), d.runtime.GetMessageCount()))
+
+		// Show sub-agent sessions if any
+		subAgentSessions := d.runtime.GetSubAgentSessions()
+		if len(subAgentSessions) > 0 {
+			sb.WriteString(fmt.Sprintf("\n\nSub-agent sessions (%d):\n", len(subAgentSessions)))
+			for _, sa := range subAgentSessions {
+				prompt := sa.Prompt
+				if len(prompt) > 40 {
+					prompt = prompt[:37] + "..."
+				}
+				sb.WriteString(fmt.Sprintf("  agent:%s  [%s] %s\n", sa.AgentID, sa.Status, prompt))
+			}
+			sb.WriteString("\nResume a sub-agent context: /session resume agent:<agent-id>")
+		}
+
+		sb.WriteString("\n\nUsage: /session [list|load|new|delete|resume] [session-id|agent:<id>]")
+		return &Result{Action: "continue", Message: sb.String()}, nil
 	}
 
 	switch parts[0] {
@@ -641,23 +732,75 @@ func (d *Dispatcher) handleSession(remainder string) (*Result, error) {
 				}
 			}
 		}
+
+		var sb strings.Builder
+
+		// Regular sessions
 		var sessions []string
 		sessions = append(sessions, current...)
 		sessions = append(sessions, other...)
-		if len(sessions) == 0 {
+		if len(sessions) > 0 {
+			sb.WriteString("Sessions:\n")
+			sb.WriteString(strings.Join(sessions, "\n"))
+		}
+
+		// Sub-agent sessions
+		subAgentSessions := d.runtime.GetSubAgentSessions()
+		if len(subAgentSessions) > 0 {
+			sb.WriteString(fmt.Sprintf("\n\nSub-agent sessions (%d):\n", len(subAgentSessions)))
+			for _, sa := range subAgentSessions {
+				prompt := sa.Prompt
+				if len(prompt) > 50 {
+					prompt = prompt[:47] + "..."
+				}
+				sb.WriteString(fmt.Sprintf("  agent:%s  [%s] %-16s %s\n", sa.AgentID, sa.Status, sa.AgentType, prompt))
+			}
+		}
+
+		if sb.Len() == 0 {
 			return &Result{Action: "continue", Message: "No saved sessions found."}, nil
 		}
-		return &Result{Action: "continue", Message: "Sessions:\n" + strings.Join(sessions, "\n") + "\n\nSwitch: /session load <id>   New: /session new   Delete: /session delete <id>"}, nil
+
+		sb.WriteString("\n\nSwitch: /session load <id>   New: /session new   Delete: /session delete <id>\nResume sub-agent: /session resume agent:<agent-id>")
+		return &Result{Action: "continue", Message: sb.String()}, nil
 
 	case "load", "switch":
 		if len(parts) < 2 {
-			return &Result{Action: "continue", Message: "Usage: /session load <session-id>\nUse /session list to see available sessions."}, nil
+			return &Result{Action: "continue", Message: "Usage: /session load <session-id> | /session load agent:<agent-id>\nUse /session list to see available sessions."}, nil
 		}
 		sessionID := parts[1]
+
+		// Check if loading a sub-agent context
+		if strings.HasPrefix(sessionID, "agent:") {
+			agentID := strings.TrimPrefix(sessionID, "agent:")
+			if err := d.runtime.ResumeSubAgentSession(agentID); err != nil {
+				return &Result{Action: "continue", Message: "Failed to resume sub-agent: " + err.Error()}, nil
+			}
+			return &Result{Action: "continue", Message: fmt.Sprintf("Resumed sub-agent context: %s (%d messages loaded).", agentID, d.runtime.GetMessageCount())}, nil
+		}
+
 		if err := d.runtime.LoadSession(sessionID); err != nil {
 			return &Result{Action: "continue", Message: "Failed to load session: " + err.Error()}, nil
 		}
 		return &Result{Action: "continue", Message: fmt.Sprintf("Switched to session: %s (%d messages from previous conversation loaded).\nPrevious session saved automatically.", d.runtime.GetSessionID(), d.runtime.GetMessageCount())}, nil
+
+	case "resume":
+		// Supports agent:<id> syntax for sub-agent resumption
+		if len(parts) < 2 {
+			return &Result{Action: "continue", Message: "Usage: /session resume <session-id> | /session resume agent:<agent-id>"}, nil
+		}
+		target := parts[1]
+		if strings.HasPrefix(target, "agent:") {
+			agentID := strings.TrimPrefix(target, "agent:")
+			if err := d.runtime.ResumeSubAgentSession(agentID); err != nil {
+				return &Result{Action: "continue", Message: "Failed to resume sub-agent: " + err.Error()}, nil
+			}
+			return &Result{Action: "continue", Message: fmt.Sprintf("Resumed sub-agent context: %s (%d messages loaded).", agentID, d.runtime.GetMessageCount())}, nil
+		}
+		if err := d.runtime.LoadSession(target); err != nil {
+			return &Result{Action: "continue", Message: "Failed to resume session: " + err.Error()}, nil
+		}
+		return &Result{Action: "continue", Message: fmt.Sprintf("Resumed session: %s (%d messages loaded).", d.runtime.GetSessionID(), d.runtime.GetMessageCount())}, nil
 
 	case "new":
 		oldID := d.runtime.GetSessionID()
@@ -679,7 +822,7 @@ func (d *Dispatcher) handleSession(remainder string) (*Result, error) {
 		return &Result{Action: "continue", Message: fmt.Sprintf("Session %s deleted.", parts[1])}, nil
 
 	default:
-		return &Result{Action: "continue", Message: "Usage: /session [list|load|new|delete] [session-id]\n\n  list     - Show all saved sessions\n  load <id>- Switch to a different session\n  new      - Create a fresh session\n  delete <id> - Delete a saved session"}, nil
+		return &Result{Action: "continue", Message: "Usage: /session [list|load|new|delete|resume] [session-id|agent:<id>]\n\n  list              - Show all saved sessions\n  load <id>         - Switch to a different session\n  new               - Create a fresh session\n  delete <id>       - Delete a saved session\n  resume agent:<id> - Resume a sub-agent's context"}, nil
 	}
 }
 
@@ -804,20 +947,437 @@ func (d *Dispatcher) handlePlugin(remainder string) (*Result, error) {
 
 // --- Agents ---
 
-func (d *Dispatcher) handleAgents() (*Result, error) {
-	agents := []struct {
-		name, description string
-	}{
-		{"general-purpose", "General-purpose agent for research, search, and multi-step tasks"},
-		{"Explore", "Fast agent for exploring codebases - file search, content search"},
-		{"Plan", "Software architect agent for designing implementation plans"},
+func (d *Dispatcher) handleAgents(remainder string) (*Result, error) {
+	parts := parseQuotedFields(remainder)
+	if len(parts) == 0 {
+		return d.handleAgentsList()
 	}
+
+	switch parts[0] {
+	case "list", "ls":
+		return d.handleAgentsList()
+	case "show", "info", "get":
+		if len(parts) < 2 {
+			return &Result{Action: "continue", Message: "Usage: /agents show <name>\nShow detailed information about an agent."}, nil
+		}
+		return d.handleAgentsShow(parts[1])
+	case "create", "new":
+		return d.handleAgentsCreate(parts[1:])
+	case "call", "run":
+		return d.handleAgentsCall(parts[1:])
+	case "edit", "update":
+		return d.handleAgentsEdit(parts[1:])
+	case "delete", "rm", "remove":
+		if len(parts) < 2 {
+			return &Result{Action: "continue", Message: "Usage: /agents delete <name> [--project|--user]\nDelete a custom agent."}, nil
+		}
+		return d.handleAgentsDelete(parts[1:])
+	default:
+		return &Result{Action: "continue", Message: "Agent Management:\n\n  /agents                   List all available agents\n  /agents list              List all available agents\n  /agents show <name>       Show detailed agent information\n  /agents create <name>     Create a new custom agent\n  /agents call <name> <prompt>   Call (run) an agent with a prompt\n  /agents edit <name>       Edit an existing custom agent\n  /agents delete <name>     Delete a custom agent\n"}, nil
+	}
+}
+
+func (d *Dispatcher) handleAgentsList() (*Result, error) {
 	var sb strings.Builder
 	sb.WriteString("Available Agents:\n\n")
-	for _, a := range agents {
-		sb.WriteString(fmt.Sprintf("  %-20s %s\n", a.name, a.description))
+
+	workspaceRoot := d.runtime.GetWorkspaceRoot()
+
+	if d.agentsProvider != nil {
+		agents, err := d.agentsProvider.ListAgents(workspaceRoot)
+		if err != nil {
+			return &Result{Action: "continue", Message: "Failed to list agents: " + err.Error()}, nil
+		}
+
+		// Group by source
+		builtinCount := 0
+		var custom []AgentInfo
+		for _, a := range agents {
+			if a.Source == "builtin" {
+				if builtinCount == 0 {
+					sb.WriteString("  Built-in Agents:\n")
+				}
+				sb.WriteString(fmt.Sprintf("    %-20s %s\n", a.Name, a.Description))
+				builtinCount++
+			} else {
+				custom = append(custom, a)
+			}
+		}
+
+		if len(custom) > 0 {
+			sb.WriteString("\n  Custom Agents:\n")
+			for _, a := range custom {
+				sourceTag := ""
+				if a.Source == "user" {
+					sourceTag = " (global)"
+				} else if a.Source == "project" {
+					sourceTag = " (project)"
+				}
+				sb.WriteString(fmt.Sprintf("    %-20s %s%s\n", a.Name, a.Description, sourceTag))
+			}
+		}
+
+		sb.WriteString(fmt.Sprintf("\n  %d built-in agent(s)", builtinCount))
+		if len(custom) > 0 {
+			sb.WriteString(fmt.Sprintf(", %d custom agent(s) from .glaw/agents/ and ~/.glaw/agents/", len(custom)))
+		}
+	} else {
+		// Fallback: no provider registered
+		sb.WriteString("  No agent provider configured.\n")
 	}
+
+	sb.WriteString("\n")
+	sb.WriteString("\n  Use /agents show <name> for details, /agents call <name> <prompt> to run.")
 	return &Result{Action: "continue", Message: sb.String()}, nil
+}
+
+func (d *Dispatcher) handleAgentsShow(name string) (*Result, error) {
+	if d.agentsProvider == nil {
+		return &Result{Action: "continue", Message: "No agent provider configured."}, nil
+	}
+
+	workspaceRoot := d.runtime.GetWorkspaceRoot()
+	agent, err := d.agentsProvider.GetAgent(workspaceRoot, name)
+	if err != nil {
+		return &Result{Action: "continue", Message: fmt.Sprintf("Agent %q not found: %s", name, err.Error())}, nil
+	}
+	if agent == nil {
+		return &Result{Action: "continue", Message: fmt.Sprintf("Agent %q not found.", name)}, nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Agent: %s\n", agent.Name))
+	sb.WriteString(fmt.Sprintf("Source: %s\n", agent.Source))
+	sb.WriteString(fmt.Sprintf("Description: %s\n", agent.Description))
+
+	if len(agent.Tools) > 0 {
+		sb.WriteString(fmt.Sprintf("Tools: %s\n", strings.Join(agent.Tools, ", ")))
+	} else {
+		sb.WriteString("Tools: all (inherits from parent)\n")
+	}
+
+	if agent.Model != "" {
+		sb.WriteString(fmt.Sprintf("Model: %s\n", agent.Model))
+	} else {
+		sb.WriteString("Model: inherit\n")
+	}
+
+	if agent.Prompt != "" {
+		prompt := agent.Prompt
+		if len(prompt) > 500 {
+			prompt = prompt[:497] + "..."
+		}
+		sb.WriteString(fmt.Sprintf("\nSystem Prompt:\n%s\n", prompt))
+	}
+
+	return &Result{Action: "continue", Message: sb.String()}, nil
+}
+
+func (d *Dispatcher) handleAgentsCreate(parts []string) (*Result, error) {
+	// /agents create <name> --desc "description" [--tools tool1,tool2] [--model sonnet] [--scope project|user] [--prompt "system prompt"]
+	if len(parts) < 1 {
+		return &Result{Action: "continue", Message: `Usage: /agents create <name> [options]
+
+Options:
+  --desc <description>    Agent description (required)
+  --tools <tool1,tool2>   Comma-separated list of tools (default: all)
+  --model <model>         Model to use: sonnet, opus, haiku, inherit (default: inherit)
+  --scope <scope>         Where to create: project or user (default: project)
+  --prompt <prompt>       System prompt for the agent
+
+Examples:
+  /agents create my-reviewer --desc "Code review specialist" --tools read_file,grep_search
+  /agents create security-agent --desc "Security auditor" --tools read_file,grep_search,bash --model sonnet --scope user
+`}, nil
+	}
+
+	name := parts[0]
+	if name == "" {
+		return &Result{Action: "continue", Message: "Agent name is required."}, nil
+	}
+
+	// Parse flags
+	var desc, toolsStr, model, scope, prompt string
+	for i := 1; i < len(parts); i++ {
+		switch parts[i] {
+		case "--desc", "-d":
+			i++
+			if i < len(parts) {
+				desc = parts[i]
+			}
+		case "--tools", "-t":
+			i++
+			if i < len(parts) {
+				toolsStr = parts[i]
+			}
+		case "--model", "-m":
+			i++
+			if i < len(parts) {
+				model = parts[i]
+			}
+		case "--scope", "-s":
+			i++
+			if i < len(parts) {
+				scope = parts[i]
+			}
+		case "--prompt", "-p":
+			i++
+			if i < len(parts) {
+				prompt = parts[i]
+			}
+		}
+	}
+
+	if desc == "" {
+		desc = "Custom agent: " + name
+	}
+	if scope == "" {
+		scope = "project"
+	}
+
+	var tools []string
+	if toolsStr != "" {
+		tools = strings.Split(toolsStr, ",")
+		for i := range tools {
+			tools[i] = strings.TrimSpace(tools[i])
+		}
+	}
+
+	if d.agentsProvider == nil {
+		return &Result{Action: "continue", Message: "No agent provider configured."}, nil
+	}
+
+	workspaceRoot := d.runtime.GetWorkspaceRoot()
+	if err := d.agentsProvider.CreateAgent(workspaceRoot, name, desc, scope, tools, model, prompt); err != nil {
+		return &Result{Action: "continue", Message: "Failed to create agent: " + err.Error()}, nil
+	}
+
+	return &Result{Action: "continue", Message: fmt.Sprintf("Agent %q created successfully.\n  Description: %s\n  Scope: %s\n  Tools: %s\n  Model: %s\n\nUse /agents call %s <prompt> to run it.", name, desc, scope, toolsStrOrDefault(toolsStr), modelOrDefault(model), name)}, nil
+}
+
+func (d *Dispatcher) handleAgentsCall(parts []string) (*Result, error) {
+	if len(parts) < 2 {
+		return &Result{Action: "continue", Message: "Usage: /agents call <name> <prompt>\nCall (run) an agent with a task prompt.\n\nExample:\n  /agents call Explore \"Search for all error handling patterns\""}, nil
+	}
+
+	name := parts[0]
+	// After parseQuotedFields, quoted content is already merged into single tokens.
+	// If there are multiple remaining parts, join them (handles unquoted multi-word prompts).
+	taskPrompt := strings.Join(parts[1:], " ")
+
+	if d.agentsProvider == nil {
+		return &Result{Action: "continue", Message: "No agent provider configured."}, nil
+	}
+
+	ctx := context.Background()
+	output, err := d.agentsProvider.CallAgent(ctx, name, taskPrompt)
+	if err != nil {
+		return &Result{Action: "continue", Message: fmt.Sprintf("Agent %q failed: %s", name, err.Error())}, nil
+	}
+
+	return &Result{Action: "continue", Message: fmt.Sprintf("Agent %q result:\n\n%s", name, output)}, nil
+}
+
+func (d *Dispatcher) handleAgentsEdit(parts []string) (*Result, error) {
+	if len(parts) < 1 {
+		return &Result{Action: "continue", Message: `Usage: /agents edit <name> [options]
+
+Options:
+  --desc <description>    Update agent description
+  --tools <tool1,tool2>   Update tool list
+  --model <model>         Update model
+  --prompt <prompt>       Update system prompt
+
+Examples:
+  /agents edit my-agent --desc "New description"
+  /agents edit my-agent --tools read_file,bash --model sonnet
+`}, nil
+	}
+
+	name := parts[0]
+
+	// Parse flags
+	var desc, toolsStr, model, prompt string
+	hasChanges := false
+	for i := 1; i < len(parts); i++ {
+		switch parts[i] {
+		case "--desc", "-d":
+			i++
+			if i < len(parts) {
+				desc = parts[i]
+				hasChanges = true
+			}
+		case "--tools", "-t":
+			i++
+			if i < len(parts) {
+				toolsStr = parts[i]
+				hasChanges = true
+			}
+		case "--model", "-m":
+			i++
+			if i < len(parts) {
+				model = parts[i]
+				hasChanges = true
+			}
+		case "--prompt", "-p":
+			i++
+			if i < len(parts) {
+				prompt = parts[i]
+				hasChanges = true
+			}
+		}
+	}
+
+	if !hasChanges {
+		return &Result{Action: "continue", Message: "No changes specified. Use --desc, --tools, --model, or --prompt flags."}, nil
+	}
+
+	if d.agentsProvider == nil {
+		return &Result{Action: "continue", Message: "No agent provider configured."}, nil
+	}
+
+	workspaceRoot := d.runtime.GetWorkspaceRoot()
+
+	// Get existing agent
+	existing, err := d.agentsProvider.GetAgent(workspaceRoot, name)
+	if err != nil || existing == nil {
+		return &Result{Action: "continue", Message: fmt.Sprintf("Agent %q not found. Only existing custom agents can be edited.", name)}, nil
+	}
+	if existing.Source == "builtin" {
+		return &Result{Action: "continue", Message: fmt.Sprintf("Agent %q is a built-in agent and cannot be edited. Create a custom agent with the same name in .glaw/agents/ to override it.", name)}, nil
+	}
+
+	// Build updated config
+	if desc == "" {
+		desc = existing.Description
+	}
+	var tools []string
+	if toolsStr != "" {
+		tools = strings.Split(toolsStr, ",")
+		for i := range tools {
+			tools[i] = strings.TrimSpace(tools[i])
+		}
+	} else if len(existing.Tools) > 0 {
+		tools = existing.Tools
+	}
+	if model == "" {
+		model = existing.Model
+	}
+	if prompt == "" {
+		prompt = existing.Prompt
+	}
+
+	scope := existing.Source
+
+	// Delete and recreate
+	if err := d.agentsProvider.DeleteAgent(workspaceRoot, name, scope); err != nil {
+		return &Result{Action: "continue", Message: "Failed to update agent: " + err.Error()}, nil
+	}
+	if err := d.agentsProvider.CreateAgent(workspaceRoot, name, desc, scope, tools, model, prompt); err != nil {
+		return &Result{Action: "continue", Message: "Failed to update agent: " + err.Error()}, nil
+	}
+
+	return &Result{Action: "continue", Message: fmt.Sprintf("Agent %q updated successfully.", name)}, nil
+}
+
+func (d *Dispatcher) handleAgentsDelete(parts []string) (*Result, error) {
+	name := parts[0]
+	scope := "project"
+
+	// Parse optional scope flag
+	for i := 1; i < len(parts); i++ {
+		switch parts[i] {
+		case "--project":
+			scope = "project"
+		case "--user", "--global":
+			scope = "user"
+		}
+	}
+
+	if d.agentsProvider == nil {
+		return &Result{Action: "continue", Message: "No agent provider configured."}, nil
+	}
+
+	workspaceRoot := d.runtime.GetWorkspaceRoot()
+
+	// Check if it's a built-in agent
+	existing, err := d.agentsProvider.GetAgent(workspaceRoot, name)
+	if err == nil && existing != nil && existing.Source == "builtin" {
+		return &Result{Action: "continue", Message: fmt.Sprintf("Agent %q is a built-in agent and cannot be deleted.", name)}, nil
+	}
+
+	if err := d.agentsProvider.DeleteAgent(workspaceRoot, name, scope); err != nil {
+		return &Result{Action: "continue", Message: "Failed to delete agent: " + err.Error()}, nil
+	}
+
+	return &Result{Action: "continue", Message: fmt.Sprintf("Agent %q deleted.", name)}, nil
+}
+
+// parseQuotedFields splits a string into fields like a shell would,
+// respecting double-quoted and single-quoted strings.
+// e.g. `foo --desc "hello world" --bar baz` → ["foo", "--desc", "hello world", "--bar", "baz"]
+func parseQuotedFields(s string) []string {
+	var fields []string
+	var buf strings.Builder
+	inDouble := false
+	inSingle := false
+
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+
+		if inDouble {
+			if ch == '"' {
+				inDouble = false
+			} else {
+				buf.WriteByte(ch)
+			}
+			continue
+		}
+		if inSingle {
+			if ch == '\'' {
+				inSingle = false
+			} else {
+				buf.WriteByte(ch)
+			}
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inDouble = true
+		case '\'':
+			inSingle = true
+		case ' ', '\t':
+			if buf.Len() > 0 {
+				fields = append(fields, buf.String())
+				buf.Reset()
+			}
+		default:
+			buf.WriteByte(ch)
+		}
+	}
+
+	if buf.Len() > 0 {
+		fields = append(fields, buf.String())
+	}
+
+	return fields
+}
+
+// toolsStrOrDefault returns the tools string or "all"
+func toolsStrOrDefault(s string) string {
+	if s == "" {
+		return "all"
+	}
+	return s
+}
+
+// modelOrDefault returns the model string or "inherit"
+func modelOrDefault(s string) string {
+	if s == "" {
+		return "inherit"
+	}
+	return s
 }
 
 // --- Skills ---
