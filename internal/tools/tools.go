@@ -857,9 +857,7 @@ func (r *Registry) analyzeTool(ctx context.Context, input json.RawMessage) (*run
 		if result == nil {
 			return &runtime.ToolOutput{Content: "Analysis produced no results.", IsError: true}, nil
 		}
-		if err := result.Save(analysisPath); err != nil {
-			// still return result, just note cache failure
-		}
+		_ = result.Save(analysisPath) //nolint:errcheck // best-effort cache save
 		output := result.FormatSummary()
 		if args.Format == "text" {
 			output += "── Dependency Graph (Mermaid) ─────────────\n```mermaid\n" + result.Graph.Mermaid + "```\n"
