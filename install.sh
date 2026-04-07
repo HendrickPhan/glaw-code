@@ -79,11 +79,10 @@ get_latest_version() {
   local api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
 
   RELEASE_VERSION=""
-  local response
-  response=$(curl -fsSL "$api_url" 2>/dev/null || true)
-  if [ -n "$response" ]; then
-    RELEASE_VERSION=$(echo "$response" | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name"\s*:\s*"([^"]+)".*/\1/' || true)
-  fi
+  RELEASE_VERSION=$(curl -fsSL "$api_url" 2>/dev/null \
+    | grep '"tag_name"' \
+    | head -1 \
+    | cut -d'"' -f4 || true)
 
   if [ -z "${RELEASE_VERSION:-}" ]; then
     warn "No GitHub release found. Will try local prebuild/ directory."
@@ -97,7 +96,7 @@ get_latest_version() {
 # -------------------------------------------------------
 has_local_prebuild() {
   local script_dir
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
   local filename
   filename="$(binary_filename)"
   local prebuild_path="${script_dir}/prebuild/${filename}"
@@ -126,7 +125,7 @@ download_binary() {
   # from GitHub Releases.
 
   local script_dir
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
   local prebuild_path="${script_dir}/prebuild/${filename}"
 
   if [ "${FORCE_LOCAL:-}" = "1" ] || [ -f "$prebuild_path" ]; then
