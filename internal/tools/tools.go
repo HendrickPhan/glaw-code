@@ -847,7 +847,9 @@ func (r *Registry) analyzeTool(ctx context.Context, input json.RawMessage) (*run
 		if result == nil {
 			return &runtime.ToolOutput{Content: "Analysis produced no results.", IsError: true}, nil
 		}
-		result.Save(analysisPath)
+		if err := result.Save(analysisPath); err != nil {
+			return &runtime.ToolOutput{Content: fmt.Sprintf("Failed to save analysis: %v", err), IsError: true}, nil
+		}
 		return &runtime.ToolOutput{Content: result.FormatGraph(args.Format), IsError: false}, nil
 
 	case "full", "":
@@ -1345,7 +1347,7 @@ func (r *Registry) performAnalysis() *analysisResult {
 	// moduleMap: dir -> moduleInfo (group files by directory per language)
 	moduleMap := make(map[string]*moduleInfo)
 
-	filepath.WalkDir(r.workspaceRoot, func(path string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(r.workspaceRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}

@@ -486,7 +486,7 @@ func TestE2ECmdSkillsList(t *testing.T) {
 	if err := os.Chdir(tmpDir); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chdir(origDir)
+	defer func() { _ = os.Chdir(origDir) }()
 
 	d := commands.NewDispatcher(newMockRuntimeFS(tmpDir))
 	result := handleCmd(t, d, "/skills")

@@ -283,11 +283,25 @@ func createMultiLangProject(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 
+	// Helper to create directories and files; fatal on error.
+	mkdir := func(path string) {
+		t.Helper()
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile := func(path string, data []byte) {
+		t.Helper()
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	// Go project files
-	os.MkdirAll(filepath.Join(dir, "cmd", "server"), 0o755)
-	os.MkdirAll(filepath.Join(dir, "internal", "api"), 0o755)
-	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module github.com/test/project\n\ngo 1.22\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, "cmd", "server", "main.go"), []byte(`package main
+	mkdir(filepath.Join(dir, "cmd", "server"))
+	mkdir(filepath.Join(dir, "internal", "api"))
+	writeFile(filepath.Join(dir, "go.mod"), []byte("module github.com/test/project\n\ngo 1.22\n"))
+	writeFile(filepath.Join(dir, "cmd", "server", "main.go"), []byte(`package main
 
 import (
 	"fmt"
@@ -297,8 +311,8 @@ import (
 func main() {
 	fmt.Println("hello")
 }
-`), 0o644)
-	os.WriteFile(filepath.Join(dir, "internal", "api", "server.go"), []byte(`package api
+`))
+	writeFile(filepath.Join(dir, "internal", "api", "server.go"), []byte(`package api
 
 import "net/http"
 
@@ -306,57 +320,57 @@ import "net/http"
 type Server struct{}
 
 func NewServer() *Server { return &Server{} }
-`), 0o644)
-	os.WriteFile(filepath.Join(dir, "internal", "api", "server_test.go"), []byte(`package api
+`))
+	writeFile(filepath.Join(dir, "internal", "api", "server_test.go"), []byte(`package api
 
 import "testing"
 
 func TestNewServer(t *testing.T) {}
-`), 0o644)
+`))
 
 	// Python project files
-	os.MkdirAll(filepath.Join(dir, "src", "myapp"), 0o755)
-	os.WriteFile(filepath.Join(dir, "src", "myapp", "__init__.py"), []byte(`"""My application package."""
+	mkdir(filepath.Join(dir, "src", "myapp"))
+	writeFile(filepath.Join(dir, "src", "myapp", "__init__.py"), []byte(`"""My application package."""
 
 import os
 import sys
 
 def main():
     print("hello from python")
-`), 0o644)
-	os.WriteFile(filepath.Join(dir, "src", "myapp", "utils.py"), []byte(`"""Utility functions."""
+`))
+	writeFile(filepath.Join(dir, "src", "myapp", "utils.py"), []byte(`"""Utility functions."""
 
 import json
 import re
 
 def helper(x):
     return x.strip()
-`), 0o644)
-	os.WriteFile(filepath.Join(dir, "src", "myapp", "test_utils.py"), []byte(`"""Tests for utils."""
+`))
+	writeFile(filepath.Join(dir, "src", "myapp", "test_utils.py"), []byte(`"""Tests for utils."""
 
 import unittest
 
 class TestUtils(unittest.TestCase):
     def test_helper(self):
         self.assertEqual(helper("  hi  "), "hi")
-`), 0o644)
-	os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("flask==2.0\nrequests==2.28\n"), 0o644)
-	os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte(`[project]
+`))
+	writeFile(filepath.Join(dir, "requirements.txt"), []byte("flask==2.0\nrequests==2.28\n"))
+	writeFile(filepath.Join(dir, "pyproject.toml"), []byte(`[project]
 name = "myapp"
 version = "0.1.0"
-`), 0o644)
+`))
 
 	// JavaScript / TypeScript project files
-	os.MkdirAll(filepath.Join(dir, "web", "src"), 0o755)
-	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name": "myapp-web", "dependencies": {"express": "^4.18"}}}
-`), 0o644)
-	os.WriteFile(filepath.Join(dir, "web", "src", "index.js"), []byte(`const express = require('express');
+	mkdir(filepath.Join(dir, "web", "src"))
+	writeFile(filepath.Join(dir, "package.json"), []byte(`{"name": "myapp-web", "dependencies": {"express": "^4.18"}}}
+`))
+	writeFile(filepath.Join(dir, "web", "src", "index.js"), []byte(`const express = require('express');
 
 function handler(req, res) {
     res.send('hello');
 }
-`), 0o644)
-	os.WriteFile(filepath.Join(dir, "web", "src", "app.ts"), []byte(`import express from 'express';
+`))
+	writeFile(filepath.Join(dir, "web", "src", "app.ts"), []byte(`import express from 'express';
 
 interface App {
     port: number;
@@ -365,30 +379,30 @@ interface App {
 function createApp(config: App) {
     return config;
 }
-`), 0o644)
-	os.WriteFile(filepath.Join(dir, "web", "src", "app.test.ts"), []byte(`import { createApp } from './app';
+`))
+	writeFile(filepath.Join(dir, "web", "src", "app.test.ts"), []byte(`import { createApp } from './app';
 
 describe('createApp', () => {
     it('works', () => {
         expect(createApp({ port: 3000 })).toBeDefined();
     });
 });
-`), 0o644)
+`))
 
 	// Docs & config
-	os.WriteFile(filepath.Join(dir, "README.md"), []byte(`# Test Project
+	writeFile(filepath.Join(dir, "README.md"), []byte(`# Test Project
 Multi-language test project.
-`), 0o644)
-	os.WriteFile(filepath.Join(dir, "Makefile"), []byte(`build:\n\tgo build ./...\n`), 0o644)
-	os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(`FROM golang:1.22\nCOPY . .\n`), 0o644)
+`))
+	writeFile(filepath.Join(dir, "Makefile"), []byte(`build:\n\tgo build ./...\n`))
+	writeFile(filepath.Join(dir, "Dockerfile"), []byte(`FROM golang:1.22\nCOPY . .\n`))
 
 	// Create .git to test exclusion
-	os.MkdirAll(filepath.Join(dir, ".git", "objects"), 0o755)
-	os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte("ref: refs/heads/main"), 0o644)
+	mkdir(filepath.Join(dir, ".git", "objects"))
+	writeFile(filepath.Join(dir, ".git", "HEAD"), []byte("ref: refs/heads/main"))
 
 	// Create node_modules to test exclusion
-	os.MkdirAll(filepath.Join(dir, "node_modules", "express"), 0o755)
-	os.WriteFile(filepath.Join(dir, "node_modules", "express", "index.js"), []byte("module.exports = {};"), 0o644)
+	mkdir(filepath.Join(dir, "node_modules", "express"))
+	writeFile(filepath.Join(dir, "node_modules", "express", "index.js"), []byte("module.exports = {};"))
 
 	return dir
 }
@@ -432,7 +446,7 @@ func TestAnalyzeToolSummaryMode(t *testing.T) {
 	r := NewRegistry(dir)
 
 	// Run full first to create cache
-	r.ExecuteTool(context.Background(), "analyze", json.RawMessage(`{"mode":"full"}`))
+	_, _ = r.ExecuteTool(context.Background(), "analyze", json.RawMessage(`{"mode":"full"}`))
 
 	// Now run summary — should load from cache
 	out, err := r.ExecuteTool(context.Background(), "analyze", json.RawMessage(`{"mode":"summary"}`))
