@@ -80,9 +80,8 @@ get_latest_version() {
 
   RELEASE_VERSION=""
   RELEASE_VERSION=$(curl -fsSL "$api_url" 2>/dev/null \
-    | grep '"tag_name"' \
-    | head -1 \
-    | cut -d'"' -f4 || true)
+    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    | head -1 || true)
 
   if [ -z "${RELEASE_VERSION:-}" ]; then
     warn "No GitHub release found. Will try local prebuild/ directory."
