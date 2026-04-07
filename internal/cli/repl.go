@@ -47,11 +47,8 @@ type REPL struct {
 
 // backgroundAction holds state for an action moved to background via /btw.
 type backgroundAction struct {
-	actionCtx    context.Context
 	actionCancel context.CancelFunc
 	resultCh     chan runResult
-	prompt       string
-	spinner      *Spinner
 }
 
 // runResult holds the result of a background action.

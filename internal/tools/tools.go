@@ -866,7 +866,7 @@ func (r *Registry) analyzeTool(ctx context.Context, input json.RawMessage) (*run
 		} else {
 			output += "\n" + result.FormatGraph(args.Format)
 		}
-		output += fmt.Sprintf("\nAnalysis saved to .glaw/analysis.json\n")
+		output += "\nAnalysis saved to .glaw/analysis.json\n"
 		return &runtime.ToolOutput{Content: output, IsError: false}, nil
 
 	default:
@@ -1148,11 +1148,6 @@ func isTestFile(name string) bool {
 		}
 	}
 	return false
-}
-
-// isSourceFile checks if a file extension belongs to any known language.
-func isSourceFile(ext string) bool {
-	return extToLang(ext) != ""
 }
 
 // isDocFile checks doc extensions.
@@ -1512,7 +1507,7 @@ func (r *Registry) performAnalysis() *analysisResult {
 		result.Modules = append(result.Modules, *mod)
 	}
 	sort.Slice(result.Modules, func(i, j int) bool {
-		return result.Modules[i].Path < result.Modules[i].Path
+		return result.Modules[i].Path < result.Modules[j].Path
 	})
 	s.ModuleCount = len(result.Modules)
 

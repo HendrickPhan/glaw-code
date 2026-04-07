@@ -235,9 +235,7 @@ func ReadLineWithCompletionAndHistory(prompt string, history *InputHistory) (str
 				// Handle extended sequences like ESC[1;5D (Ctrl+Left), etc.
 				if buf[0] == '1' {
 					extBuf := make([]byte, 2)
-					if n, err := os.Stdin.Read(extBuf); err == nil && n == 2 {
-						// e.g., ESC[1;5C = Ctrl+Right, ESC[1;5D = Ctrl+Left
-					}
+					_, _ = os.Stdin.Read(extBuf)
 				}
 			}
 			continue

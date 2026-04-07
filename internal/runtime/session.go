@@ -1240,9 +1240,7 @@ func (r *ConversationRuntime) NewSession() {
 
 	// Save current session first
 	if r.Session.ID != "" {
-		if _, err := SaveSession(r.Session, sessionsDir); err == nil {
-			// saved successfully
-		}
+		_, _ = SaveSession(r.Session, sessionsDir)
 	}
 
 	// Create fresh session and reset usage

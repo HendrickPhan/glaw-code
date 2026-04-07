@@ -128,12 +128,12 @@ func TestContentBlockMarshalJSON(t *testing.T) {
 			s := string(b)
 			t.Logf("JSON: %s", s)
 
-			for want, _ := range tt.wantHas {
+			for want := range tt.wantHas {
 				if !strings.Contains(s, want) {
 					t.Errorf("JSON output %q does not contain required %q", s, want)
 				}
 			}
-			for notWant, _ := range tt.wantNot {
+			for notWant := range tt.wantNot {
 				if strings.Contains(s, notWant) {
 					t.Errorf("JSON output %q should not contain %q", s, notWant)
 				}
