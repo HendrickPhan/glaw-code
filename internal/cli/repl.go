@@ -216,11 +216,6 @@ func (r *REPL) gracefulShutdown() {
 		}
 	}
 
-	// Shutdown LSP
-	if r.Runtime.LSPManager != nil {
-		_ = r.Runtime.LSPManager.Shutdown()
-	}
-
 	fmt.Printf("%sGoodbye!%s\n", Bold+Cyan, Reset)
 }
 

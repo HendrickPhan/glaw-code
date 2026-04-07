@@ -15,7 +15,6 @@ import (
 	"github.com/hieu-glaw/glaw-code/internal/api"
 	"github.com/hieu-glaw/glaw-code/internal/commands"
 	"github.com/hieu-glaw/glaw-code/internal/config"
-	"github.com/hieu-glaw/glaw-code/internal/lsp"
 )
 
 // spinnerFrames are the animation frames for the loading spinner.
@@ -737,7 +736,6 @@ type SystemPromptBuilder struct {
 	GitDiff            string
 	ToolDescriptions   []string
 	CustomInstructions string
-	LSPEnrichment      string
 }
 
 // NewSystemPromptBuilder creates a new builder.
@@ -833,10 +831,6 @@ Always execute the actual tool calls to accomplish the task. Do NOT just describ
 		parts = append(parts, "\n## Custom Instructions\n"+b.CustomInstructions)
 	}
 
-	if b.LSPEnrichment != "" {
-		parts = append(parts, "\n"+b.LSPEnrichment)
-	}
-
 	return join(parts, "\n")
 }
 
@@ -861,11 +855,10 @@ type ConversationRuntime struct {
 	ToolExecutor ToolExecutor
 	Snapshotter  *SnapshottingExecutor
 	SystemPrompt string
-	LSPManager   LSPProvider
 
 	// PermissionChecker is called before each tool execution.
 	// If it returns false, the tool is not executed and the message is
-	// returned as a tool error to the model.
+	// returned as to the model.
 	PermissionChecker func(toolName string, input json.RawMessage) bool
 
 	// running tracks whether an agentic action is currently in progress.
@@ -898,7 +891,7 @@ func (r *ConversationRuntime) SetIdle() {
 	r.cancelAction = nil
 }
 
-// CancelAction cancels the currently running action (if any).
+// CancelAction cancels thecurrently running action (if any).
 // Returns true if an action was cancelled.
 func (r *ConversationRuntime) CancelAction() bool {
 	r.mu.Lock()
@@ -910,15 +903,6 @@ func (r *ConversationRuntime) CancelAction() bool {
 		return true
 	}
 	return false
-}
-
-// LSPProvider provides LSP context enrichment for the system prompt.
-type LSPProvider interface {
-	SupportsPath(path string) bool
-	ContextEnrichment(ctx context.Context, filePath string, line, character int) (*lsp.ContextEnrichment, error)
-	Status() []lsp.ServerStatus
-	SupportedExtensions() []string
-	Shutdown() error
 }
 
 // NewConversationRuntime creates a new runtime.
@@ -1143,14 +1127,6 @@ func (r *ConversationRuntime) BuildSystemPrompt() string {
 		builder.InstructionFiles = LoadInstructionFiles(r.Permissions.WorkspaceRoot)
 	}
 
-	// Enrich with LSP context if available
-	if r.LSPManager != nil {
-		enrichment := buildLSPEnrichmentSection(r.LSPManager)
-		if enrichment != "" {
-			builder.LSPEnrichment = enrichment
-		}
-	}
-
 	return builder.Build()
 }
 
@@ -1360,44 +1336,3 @@ func (r *ConversationRuntime) SetConfigValue(key, value string) error {
 	return config.SaveProject(workspaceRoot, settings)
 }
 
-
-// buildLSPEnrichmentSection creates a system prompt section describing LSP capabilities.
-func buildLSPEnrichmentSection(mgr LSPProvider) string {
-	exts := mgr.SupportedExtensions()
-	if len(exts) == 0 {
-		return ""
-	}
-
-	var sb strings.Builder
-	sb.WriteString("## LSP Integration\n\n")
-	sb.WriteString("Language Server Protocol (LSP) is available for this workspace. ")
-	sb.WriteString(fmt.Sprintf("Supported file types: %s\n\n", strings.Join(exts, ", ")))
-	sb.WriteString("You have access to the following LSP tools for code navigation and analysis:\n")
-	sb.WriteString("- **lsp_go_to_definition**: Jump to the definition of a symbol at a given position\n")
-	sb.WriteString("- **lsp_find_references**: Find all references to a symbol\n")
-	sb.WriteString("- **lsp_hover**: Get type and documentation info for a symbol\n")
-	sb.WriteString("- **lsp_document_symbol**: List all symbols in a file\n")
-	sb.WriteString("- **lsp_workspace_symbol**: Search for symbols across the workspace\n")
-	sb.WriteString("- **lsp_go_to_implementation**: Find concrete implementations of an interface\n")
-	sb.WriteString("- **lsp_incoming_calls**: Find all callers of a function/method\n")
-	sb.WriteString("- **lsp_outgoing_calls**: Find all functions called by a function/method\n\n")
-	sb.WriteString("Use these tools to understand code structure, navigate definitions, trace call hierarchies, and verify refactoring safety.")
-	return sb.String()
-}
-
-// GetLSPStatus returns LSP server statuses for the commands interface.
-func (r *ConversationRuntime) GetLSPStatus() []commands.LSPServerStatus {
-	if r.LSPManager == nil {
-		return nil
-	}
-	statuses := r.LSPManager.Status()
-	result := make([]commands.LSPServerStatus, len(statuses))
-	for i, s := range statuses {
-		result[i] = commands.LSPServerStatus{
-			Name:    s.Name,
-			Command: s.Command,
-			Running: s.Running,
-		}
-	}
-	return result
-}

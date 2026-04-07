@@ -59,16 +59,8 @@ type Runtime interface {
 	GetWorkspaceRoot() string
 	GetAllSettings() map[string]interface{}
 	SetConfigValue(key, value string) error
-	GetLSPStatus() []LSPServerStatus
 	RevertLastTurn() (int, error)
 	RevertAll() (int, error)
-}
-
-// LSPServerStatus represents the status of an LSP server for display.
-type LSPServerStatus struct {
-	Name    string `json:"name"`
-	Command string `json:"command"`
-	Running bool   `json:"running"`
 }
 
 // UsageInfo holds usage statistics.
@@ -110,9 +102,8 @@ var Specs = []Spec{
 	{Name: "skills", Summary: "List available skills", Category: CategoryCore},
 	{Name: "btw", Summary: "Ask a side question during execution", ArgumentHint: "<question>", Category: CategoryCore},
 	{Name: "tasks", Summary: "Manage agent tasks", ArgumentHint: "[create|list|update|delete] [args]", Category: CategoryCore},
-	{Name: "lsp", Summary: "LSP server management and status", ArgumentHint: "[status|restart|detect]", Category: CategoryWorkspace},
 	{Name: "yolo", Summary: "Toggle yolo mode (auto-approve all tool calls)", Category: CategoryCore},
-{Name: "revert", Aliases: []string{"undo"}, Summary: "Revert file changes from the last turn", ArgumentHint: "[all]", Category: CategoryWorkspace},
+	{Name: "revert", Aliases: []string{"undo"}, Summary: "Revert file changes from the last turn", ArgumentHint: "[all]", Category: CategoryWorkspace},
 	{Name: "analyze", Summary: "Analyze project source code and generate summary/graph", ArgumentHint: "[full|summary|graph] [mermaid|dot|json]", Category: CategoryWorkspace},
 }
 
@@ -278,8 +269,6 @@ func (d *Dispatcher) dispatch(ctx context.Context, cmd *ParsedCommand) (*Result,
 		return d.handleBTW(cmd.Remainder)
 	case "tasks":
 		return d.handleTasks(cmd.Remainder)
-	case "lsp":
-		return d.handleLSP(cmd.Remainder)
 	case "yolo":
 		return d.handleYolo()
 	case "revert":
@@ -1251,50 +1240,6 @@ func (d *Dispatcher) handleTasks(remainder string) (*Result, error) {
 	default:
 		return &Result{Action: "continue", Message: "Usage: /tasks [create|list|update|delete] [args]"}, nil
 	}
-}
-
-// --- /lsp: LSP server management ---
-
-func (d *Dispatcher) handleLSP(remainder string) (*Result, error) {
-	parts := strings.Fields(remainder)
-	if len(parts) == 0 {
-		return d.handleLSPStatus()
-	}
-
-	switch parts[0] {
-	case "status":
-		return d.handleLSPStatus()
-	case "detect":
-		return d.handleLSPDetect()
-	case "restart":
-		return &Result{Action: "continue", Message: "LSP restart requested. Language servers will reconnect on next tool use."}, nil
-	default:
-		return &Result{Action: "continue", Message: "Usage: /lsp [status|detect|restart]"}, nil
-	}
-}
-
-func (d *Dispatcher) handleLSPStatus() (*Result, error) {
-	statuses := d.runtime.GetLSPStatus()
-	if len(statuses) == 0 {
-		return &Result{Action: "continue", Message: "No LSP servers configured.\n\nTo auto-detect language servers, use: /lsp detect\nTo configure manually, create .glaw/lsp.json"}, nil
-	}
-
-	var sb strings.Builder
-	sb.WriteString("LSP Server Status:\n\n")
-	for _, s := range statuses {
-		state := "stopped"
-		if s.Running {
-			state = "running"
-		}
-		sb.WriteString(fmt.Sprintf("  %-30s %-10s %s\n", s.Name, state, s.Command))
-	}
-	sb.WriteString("\nLSP tools available: lsp_go_to_definition, lsp_find_references, lsp_hover, lsp_document_symbol, lsp_workspace_symbol, lsp_go_to_implementation, lsp_incoming_calls, lsp_outgoing_calls")
-
-	return &Result{Action: "continue", Message: sb.String()}, nil
-}
-
-func (d *Dispatcher) handleLSPDetect() (*Result, error) {
-	return &Result{Action: "continue", Message: "LSP auto-detection scans for known language servers on your PATH.\n\nDetected servers are configured for lazy initialization - they connect on first use.\nTo see current status, use: /lsp status\nTo manually configure, create .glaw/lsp.json with:\n  {\"servers\": [{\"name\": \"gopls\", \"command\": \"gopls\", \"args\": [\"serve\"], \"extensionToLanguage\": {\".go\": \"go\"}}]}"}, nil
 }
 
 // --- /analyze: Analyze project source code ---

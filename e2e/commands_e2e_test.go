@@ -68,7 +68,6 @@ func (m *mockRuntimeFS) RunGitCommand(args ...string) (string, error) {
 	}
 	return m.gitOutput, m.gitError
 }
-func (m *mockRuntimeFS) GetLSPStatus() []commands.LSPServerStatus { return nil }
 func (m *mockRuntimeFS) RevertLastTurn() (int, error)            { return 0, nil }
 func (m *mockRuntimeFS) RevertAll() (int, error)                 { return 0, nil }
 func (m *mockRuntimeFS) LoadSession(sessionID string) error      { m.sessionID = sessionID; return nil }

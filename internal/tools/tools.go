@@ -18,9 +18,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hieu-glaw/glaw-code/internal/agent"
 	"github.com/hieu-glaw/glaw-code/internal/api"
 	"github.com/hieu-glaw/glaw-code/internal/config"
-	"github.com/hieu-glaw/glaw-code/internal/lsp"
+
 	"github.com/hieu-glaw/glaw-code/internal/runtime"
 )
 
@@ -30,7 +31,7 @@ type ToolFunc func(ctx context.Context, input json.RawMessage) (*runtime.ToolOut
 // Registry holds all registered tool definitions and their handlers.
 type Registry struct {
 	workspaceRoot string
-	lspManager    *lsp.Manager
+	orchestrator  *agent.SubAgentOrchestrator
 	handlers      map[string]ToolFunc
 	specs         []api.ToolDefinition
 }
@@ -45,9 +46,9 @@ func NewRegistry(workspaceRoot string) *Registry {
 	return r
 }
 
-// SetLSPManager sets the LSP manager for LSP-related tools.
-func (r *Registry) SetLSPManager(m *lsp.Manager) {
-	r.lspManager = m
+// SetOrchestrator sets the sub-agent orchestrator for the sub_agent tool.
+func (r *Registry) SetOrchestrator(o *agent.SubAgentOrchestrator) {
+	r.orchestrator = o
 }
 
 // registerBuiltinTools adds all built-in tools to the registry.
@@ -132,48 +133,13 @@ func (r *Registry) registerBuiltinTools() {
 				InputSchema: json.RawMessage(`{"type":"object","properties":{"mode":{"type":"string","enum":["full","summary","graph"],"description":"Analysis mode: full (complete analysis), summary (quick overview), graph (dependency graph only)","default":"full"},"format":{"type":"string","enum":["text","mermaid","dot","json"],"description":"Output format for dependency graph: text, mermaid, dot, or json","default":"text"}},"required":[]}`),
 			}, r.analyzeTool},
 		{api.ToolDefinition{
-				Name:        "lsp_go_to_definition",
-				Description: "Find where a symbol is defined using LSP",
-				InputSchema: json.RawMessage(`{"type":"object","properties":{"file_path":{"type":"string","description":"Absolute path to the file"},"line":{"type":"integer","description":"0-indexed line number"},"character":{"type":"integer","description":"0-indexed character offset"}},"required":["file_path","line","character"]}`),
-			}, r.lspGoToDefinitionTool},
-			{api.ToolDefinition{
-				Name:        "lsp_find_references",
-				Description: "Find all references to a symbol using LSP",
-				InputSchema: json.RawMessage(`{"type":"object","properties":{"file_path":{"type":"string","description":"Absolute path to the file"},"line":{"type":"integer","description":"0-indexed line number"},"character":{"type":"integer","description":"0-indexed character offset"}},"required":["file_path","line","character"]}`),
-			}, r.lspFindReferencesTool},
-			{api.ToolDefinition{
-				Name:        "lsp_hover",
-				Description: "Get hover information for a symbol using LSP",
-				InputSchema: json.RawMessage(`{"type":"object","properties":{"file_path":{"type":"string","description":"Absolute path to the file"},"line":{"type":"integer","description":"0-indexed line number"},"character":{"type":"integer","description":"0-indexed character offset"}},"required":["file_path","line","character"]}`),
-			}, r.lspHoverTool},
-			{api.ToolDefinition{
-				Name:        "lsp_document_symbol",
-				Description: "List symbols in a document using LSP",
-				InputSchema: json.RawMessage(`{"type":"object","properties":{"file_path":{"type":"string","description":"Absolute path to the file"}},"required":["file_path"]}`),
-			}, r.lspDocumentSymbolTool},
-			{api.ToolDefinition{
-				Name:        "lsp_workspace_symbol",
-				Description: "Search for symbols across the workspace using LSP",
-				InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"Search query for symbol names"}},"required":["query"]}`),
-			}, r.lspWorkspaceSymbolTool},
-			{api.ToolDefinition{
-				Name:        "lsp_go_to_implementation",
-				Description: "Find implementations of a symbol using LSP",
-				InputSchema: json.RawMessage(`{"type":"object","properties":{"file_path":{"type":"string","description":"Absolute path to the file"},"line":{"type":"integer","description":"0-indexed line number"},"character":{"type":"integer","description":"0-indexed character offset"}},"required":["file_path","line","character"]}`),
-			}, r.lspGoToImplementationTool},
-			{api.ToolDefinition{
-				Name:        "lsp_incoming_calls",
-				Description: "Find callers of a symbol using LSP call hierarchy",
-				InputSchema: json.RawMessage(`{"type":"object","properties":{"file_path":{"type":"string","description":"Absolute path to the file"},"line":{"type":"integer","description":"0-indexed line number"},"character":{"type":"integer","description":"0-indexed character offset"}},"required":["file_path","line","character"]}`),
-			}, r.lspIncomingCallsTool},
-			{api.ToolDefinition{
-				Name:        "lsp_outgoing_calls",
-				Description: "Find callees of a symbol using LSP call hierarchy",
-				InputSchema: json.RawMessage(`{"type":"object","properties":{"file_path":{"type":"string","description":"Absolute path to the file"},"line":{"type":"integer","description":"0-indexed line number"},"character":{"type":"integer","description":"0-indexed character offset"}},"required":["file_path","line","character"]}`),
-			}, r.lspOutgoingCallsTool},
-		}
+			Name:        "sub_agent",
+			Description: "Delegate a task to a specialized sub-agent (e.g., Explore, Plan, Verification, code-reviewer, security-auditor, test-writer, docs-writer, refactorer, general-purpose, or any custom agent). The sub-agent runs with isolated context and returns a summary.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"agent_name":{"type":"string","description":"Name of the sub-agent to use. Available agents: Explore, Plan, Verification, code-reviewer, security-auditor, test-writer, docs-writer, refactorer, general-purpose, or any custom agent defined in .glaw/agents/"},"prompt":{"type":"string","description":"The task description to delegate to the sub-agent. Be specific about what the agent should do."},"wait":{"type":"boolean","description":"Whether to wait for the sub-agent to complete before returning. Default: true.","default":true}},"required":["agent_name","prompt"]}`),
+		}, r.subAgentTool},
+	}
 
-		for _, t := range tools {
+	for _, t := range tools {
 			r.handlers[t.spec.Name] = t.handler
 			r.specs = append(r.specs, t.spec)
 		}
@@ -807,6 +773,60 @@ func (r *Registry) toolSearchTool(ctx context.Context, input json.RawMessage) (*
 	}
 
 	return &runtime.ToolOutput{Content: strings.TrimSpace(sb.String()), IsError: false}, nil
+}
+
+func (r *Registry) subAgentTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
+	var args struct {
+		AgentName string `json:"agent_name"`
+		Prompt    string `json:"prompt"`
+		Wait      *bool  `json:"wait"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
+	}
+	if args.AgentName == "" {
+		return &runtime.ToolOutput{Content: "agent_name is required", IsError: true}, nil
+	}
+	if args.Prompt == "" {
+		return &runtime.ToolOutput{Content: "prompt is required", IsError: true}, nil
+	}
+
+	wait := true
+	if args.Wait != nil {
+		wait = *args.Wait
+	}
+
+	if r.orchestrator == nil {
+		return &runtime.ToolOutput{Content: "Sub-agent orchestrator not configured", IsError: true}, nil
+	}
+
+	task, err := r.orchestrator.SpawnTask(ctx, args.AgentName, args.Prompt)
+	if err != nil {
+		return &runtime.ToolOutput{Content: fmt.Sprintf("Failed to spawn sub-agent: %v", err), IsError: true}, nil
+	}
+
+	if !wait {
+		return &runtime.ToolOutput{
+			Content: fmt.Sprintf("Sub-agent task %q spawned in background (ID: %s)", args.AgentName, task.ID),
+			IsError: false,
+		}, nil
+	}
+
+	result, err := r.orchestrator.WaitTask(task.ID)
+	if err != nil {
+		return &runtime.ToolOutput{Content: fmt.Sprintf("Sub-agent task failed: %v", err), IsError: true}, nil
+	}
+
+	isError := result.Error != nil
+	output := result.Output
+	if isError {
+		output = fmt.Sprintf("Sub-agent error: %v\n%s", result.Error, output)
+	}
+
+	return &runtime.ToolOutput{
+		Content: output,
+		IsError: isError,
+	}, nil
 }
 
 func (r *Registry) analyzeTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
@@ -2169,201 +2189,3 @@ func setSettingByPath(s *config.Settings, path string, value interface{}) error 
 	return nil
 }
 
-// --- LSP Tool implementations ---
-
-func (r *Registry) lspGoToDefinitionTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
-	if r.lspManager == nil {
-		return &runtime.ToolOutput{Content: "LSP is not available. No language server configured.", IsError: true}, nil
-	}
-	var args struct {
-		FilePath string `json:"file_path"`
-		Line     int    `json:"line"`
-		Character int   `json:"character"`
-	}
-	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
-	}
-	locs, err := r.lspManager.GoToDefinition(ctx, args.FilePath, args.Line, args.Character)
-	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("LSP error: %v", err), IsError: true}, nil
-	}
-	if len(locs) == 0 {
-		return &runtime.ToolOutput{Content: "No definitions found.", IsError: false}, nil
-	}
-	return &runtime.ToolOutput{Content: formatSymbolLocations(locs), IsError: false}, nil
-}
-
-func (r *Registry) lspFindReferencesTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
-	if r.lspManager == nil {
-		return &runtime.ToolOutput{Content: "LSP is not available. No language server configured.", IsError: true}, nil
-	}
-	var args struct {
-		FilePath string `json:"file_path"`
-		Line     int    `json:"line"`
-		Character int   `json:"character"`
-	}
-	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
-	}
-	locs, err := r.lspManager.FindReferences(ctx, args.FilePath, args.Line, args.Character)
-	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("LSP error: %v", err), IsError: true}, nil
-	}
-	if len(locs) == 0 {
-		return &runtime.ToolOutput{Content: "No references found.", IsError: false}, nil
-	}
-	return &runtime.ToolOutput{Content: formatSymbolLocations(locs), IsError: false}, nil
-}
-
-func (r *Registry) lspHoverTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
-	if r.lspManager == nil {
-		return &runtime.ToolOutput{Content: "LSP is not available. No language server configured.", IsError: true}, nil
-	}
-	var args struct {
-		FilePath string `json:"file_path"`
-		Line     int    `json:"line"`
-		Character int   `json:"character"`
-	}
-	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
-	}
-	result, err := r.lspManager.Hover(ctx, args.FilePath, args.Line, args.Character)
-	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("LSP error: %v", err), IsError: true}, nil
-	}
-	if result == "" {
-		return &runtime.ToolOutput{Content: "No hover information available.", IsError: false}, nil
-	}
-	return &runtime.ToolOutput{Content: result, IsError: false}, nil
-}
-
-func (r *Registry) lspDocumentSymbolTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
-	if r.lspManager == nil {
-		return &runtime.ToolOutput{Content: "LSP is not available. No language server configured.", IsError: true}, nil
-	}
-	var args struct {
-		FilePath string `json:"file_path"`
-	}
-	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
-	}
-	locs, err := r.lspManager.DocumentSymbol(ctx, args.FilePath)
-	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("LSP error: %v", err), IsError: true}, nil
-	}
-	if len(locs) == 0 {
-		return &runtime.ToolOutput{Content: "No symbols found in document.", IsError: false}, nil
-	}
-	return &runtime.ToolOutput{Content: formatSymbolLocations(locs), IsError: false}, nil
-}
-
-func (r *Registry) lspWorkspaceSymbolTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
-	if r.lspManager == nil {
-		return &runtime.ToolOutput{Content: "LSP is not available. No language server configured.", IsError: true}, nil
-	}
-	var args struct {
-		Query string `json:"query"`
-	}
-	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
-	}
-	locs, err := r.lspManager.WorkspaceSymbol(ctx, args.Query)
-	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("LSP error: %v", err), IsError: true}, nil
-	}
-	if len(locs) == 0 {
-		return &runtime.ToolOutput{Content: "No workspace symbols found.", IsError: false}, nil
-	}
-	return &runtime.ToolOutput{Content: formatSymbolLocations(locs), IsError: false}, nil
-}
-
-func (r *Registry) lspGoToImplementationTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
-	if r.lspManager == nil {
-		return &runtime.ToolOutput{Content: "LSP is not available. No language server configured.", IsError: true}, nil
-	}
-	var args struct {
-		FilePath string `json:"file_path"`
-		Line     int    `json:"line"`
-		Character int   `json:"character"`
-	}
-	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
-	}
-	locs, err := r.lspManager.GoToImplementation(ctx, args.FilePath, args.Line, args.Character)
-	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("LSP error: %v", err), IsError: true}, nil
-	}
-	if len(locs) == 0 {
-		return &runtime.ToolOutput{Content: "No implementations found.", IsError: false}, nil
-	}
-	return &runtime.ToolOutput{Content: formatSymbolLocations(locs), IsError: false}, nil
-}
-
-func (r *Registry) lspIncomingCallsTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
-	if r.lspManager == nil {
-		return &runtime.ToolOutput{Content: "LSP is not available. No language server configured.", IsError: true}, nil
-	}
-	var args struct {
-		FilePath string `json:"file_path"`
-		Line     int    `json:"line"`
-		Character int   `json:"character"`
-	}
-	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
-	}
-	items, err := r.lspManager.IncomingCalls(ctx, args.FilePath, args.Line, args.Character)
-	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("LSP error: %v", err), IsError: true}, nil
-	}
-	if len(items) == 0 {
-		return &runtime.ToolOutput{Content: "No incoming calls found.", IsError: false}, nil
-	}
-	return &runtime.ToolOutput{Content: formatCallHierarchyItems(items), IsError: false}, nil
-}
-
-func (r *Registry) lspOutgoingCallsTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
-	if r.lspManager == nil {
-		return &runtime.ToolOutput{Content: "LSP is not available. No language server configured.", IsError: true}, nil
-	}
-	var args struct {
-		FilePath string `json:"file_path"`
-		Line     int    `json:"line"`
-		Character int   `json:"character"`
-	}
-	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
-	}
-	items, err := r.lspManager.OutgoingCalls(ctx, args.FilePath, args.Line, args.Character)
-	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("LSP error: %v", err), IsError: true}, nil
-	}
-	if len(items) == 0 {
-		return &runtime.ToolOutput{Content: "No outgoing calls found.", IsError: false}, nil
-	}
-	return &runtime.ToolOutput{Content: formatCallHierarchyItems(items), IsError: false}, nil
-}
-
-// formatSymbolLocations formats symbol locations as a readable string.
-func formatSymbolLocations(locs []lsp.SymbolLocation) string {
-	var sb strings.Builder
-	for i, loc := range locs {
-		if i > 0 {
-			sb.WriteString("\n")
-		}
-		sb.WriteString(fmt.Sprintf("%s:%d:%d", loc.Path, loc.Line, loc.Col))
-	}
-	return sb.String()
-}
-
-// formatCallHierarchyItems formats call hierarchy items as a readable string.
-func formatCallHierarchyItems(items []lsp.CallHierarchyItem) string {
-	var sb strings.Builder
-	for i, item := range items {
-		if i > 0 {
-			sb.WriteString("\n")
-		}
-		path := strings.TrimPrefix(item.URI, "file://")
-		sb.WriteString(fmt.Sprintf("%s:%d:%d - %s", path, item.Range.Start.Line+1, item.Range.Start.Character+1, item.Name))
-	}
-	return sb.String()
-}

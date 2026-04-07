@@ -42,7 +42,6 @@ func (m *mockRuntime) RunGitCommand(args ...string) (string, error) {
 func (m *mockRuntime) GetWorkspaceRoot() string                { return "/tmp" }
 func (m *mockRuntime) GetAllSettings() map[string]interface{}  { return map[string]interface{}{"model": m.model} }
 func (m *mockRuntime) SetConfigValue(key, value string) error  { return nil }
-func (m *mockRuntime) GetLSPStatus() []LSPServerStatus         { return nil }
 func (m *mockRuntime) RevertLastTurn() (int, error)            { return 0, nil }
 func (m *mockRuntime) RevertAll() (int, error)                 { return 0, nil }
 func (m *mockRuntime) LoadSession(sessionID string) error      { m.sessionID = sessionID; return nil }

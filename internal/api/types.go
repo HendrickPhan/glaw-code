@@ -41,51 +41,79 @@ type ContentBlock struct {
 	IsError   bool              `json:"is_error,omitempty"`
 }
 
-// MarshalJSON ensures that fields required by the Anthropic API are always
-// present, even when empty. Specifically:
-//   - text blocks always include the "text" field
+// MarshalJSON ensures that each content block type serializes only the fields
+// that the Anthropic Messages API expects for that type.
+//
+// Anthropic API field contract:
+//   - text:        { type, text [, id] }
+//   - tool_use:    { type, id, name, input }
+//   - tool_result: { type, tool_use_id, content [, is_error] }
+//
+// Cross-type field leakage (e.g., "id" on a tool_result block) causes
+// server-side 500 errors like:
+//   "'ClaudeContentBlockToolResult' object has no attribute 'id'"
+//
+// Additionally, required fields must always be present even when empty:
+//   - text blocks always include "text"
 //   - tool_use blocks always include "input" (defaults to {})
 //   - tool_result blocks always include "content"
-//
-// This prevents "sequence item 0: expected str instance, NoneType found"
-// errors caused by omitting empty string fields that the API requires.
 func (b ContentBlock) MarshalJSON() ([]byte, error) {
-	// Use an ordered map approach to build JSON with required fields.
-	type RawBlock struct {
-		Type      ContentBlockType  `json:"type"`
-		Text      *string           `json:"text,omitempty"`
-		ID        string            `json:"id,omitempty"`
-		Name      string            `json:"name,omitempty"`
-		Input     json.RawMessage   `json:"input,omitempty"`
-		ToolUseID string            `json:"tool_use_id,omitempty"`
-		Content   *string           `json:"content,omitempty"`
-		IsError   bool              `json:"is_error,omitempty"`
-	}
-
-	raw := RawBlock{
-		Type:      b.Type,
-		ID:        b.ID,
-		Name:      b.Name,
-		Input:     b.Input,
-		ToolUseID: b.ToolUseID,
-		IsError:   b.IsError,
-	}
-
 	switch b.Type {
 	case ContentText:
-		// Always include text field, even when empty
-		raw.Text = &b.Text
-	case ContentToolUse:
-		// Always include input, defaulting to {} if nil
-		if raw.Input == nil {
-			raw.Input = json.RawMessage(`{}`)
+		// text: { type, text [, id] }
+		type textBlock struct {
+			Type string  `json:"type"`
+			Text *string `json:"text"`
+			ID   string  `json:"id,omitempty"`
 		}
-	case ContentToolResult:
-		// Always include content field, even when empty
-		raw.Content = &b.Content
-	}
+		return json.Marshal(textBlock{
+			Type: "text",
+			Text: &b.Text,
+			ID:   b.ID,
+		})
 
-	return json.Marshal(raw)
+	case ContentToolUse:
+		// tool_use: { type, id, name, input }
+		input := b.Input
+		if input == nil {
+			input = json.RawMessage(`{}`)
+		}
+		type toolUseBlock struct {
+			Type  string          `json:"type"`
+			ID    string          `json:"id"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
+		}
+		return json.Marshal(toolUseBlock{
+			Type:  "tool_use",
+			ID:    b.ID,
+			Name:  b.Name,
+			Input: input,
+		})
+
+	case ContentToolResult:
+		// tool_result: { type, tool_use_id, content [, is_error] }
+		// CRITICAL: Must NOT include "id", "name", or "input" fields.
+		type toolResultBlock struct {
+			Type      string `json:"type"`
+			ToolUseID string `json:"tool_use_id"`
+			Content   string `json:"content"`
+			IsError   bool   `json:"is_error,omitempty"`
+		}
+		return json.Marshal(toolResultBlock{
+			Type:      "tool_result",
+			ToolUseID: b.ToolUseID,
+			Content:   b.Content,
+			IsError:   b.IsError,
+		})
+
+	default:
+		// Unknown block type — use generic serialization
+		type genericBlock struct {
+			Type ContentBlockType `json:"type"`
+		}
+		return json.Marshal(genericBlock{Type: b.Type})
+	}
 }
 
 // NewTextBlock creates a text content block.
