@@ -6,7 +6,7 @@
 
 - **Interactive REPL** with slash command autocomplete, markdown rendering, syntax highlighting, and animated tool execution
 - **Web UI** — Next.js-based interface with real-time WebSocket communication, session management, and tool call visualization
-- **22 built-in tools** — file read/write/edit, search, glob, bash execution, LSP integration, and more
+- **23 built-in tools** — file read/write/edit, search, glob, bash execution, LSP integration, project analysis, and more
 - **Multi-provider AI** — Anthropic Claude, xAI Grok, OpenAI-compatible endpoints
 - **Session management** — save, resume, and switch sessions
 - **Permission system** — configurable modes (read_only, workspace_write, danger_full_access) with interactive prompts
@@ -59,13 +59,14 @@ glaw --session sess_1234567890
 ```
 cmd/glaw/main.go          # Entry point, CLI flags, serve subcommand
 internal/
+  analyzer/              # Project source code analyzer (summary, dependency graphs)
   api/                    # Provider client (Anthropic, xAI, OpenAI-compat)
   cli/                    # REPL, terminal rendering, autocomplete, permissions UI
   commands/               # 30+ slash command handlers
   config/                 # Layered config loading (defaults → global → project → CLI)
   mcp/                    # MCP server manager (JSON-RPC over stdio)
   runtime/                # Core: ConversationRuntime, session, tools, permissions, snapshots
-  tools/                  # 22 built-in tool implementations
+  tools/                  # 23 built-in tool implementations
   web/                    # HTTP/WebSocket server, session store, static UI embedding
   tasks/                  # Task management for multi-step operations
   lsp/                    # LSP client for code intelligence
@@ -77,6 +78,7 @@ web/                      # Next.js 16 web UI (TypeScript + Tailwind)
 
 | Tool | Description |
 |------|-------------|
+| `analyze` | Analyze project source code, generate summary, dependency graph, and code statistics |
 | `read_file` | Read file contents with optional line range |
 | `write_file` | Create or overwrite files |
 | `edit_file` | Find-and-replace editing |
@@ -97,6 +99,7 @@ Type `/` in the REPL for autocomplete. Key commands:
 | Command | Description |
 |---------|-------------|
 | `/help` | Show all commands |
+| `/analyze` | Analyze project source code and generate summary/graph |
 | `/model [name]` | Show or change AI model |
 | `/clear` | Clear conversation |
 | `/compact` | Compact conversation history |
@@ -108,6 +111,55 @@ Type `/` in the REPL for autocomplete. Key commands:
 | `/session [list\|load\|delete]` | Session management |
 | `/permissions [mode]` | Change permission mode |
 | `/config [key] [value]` | Read/write configuration |
+
+## Project Analysis
+
+glaw-code includes a built-in project analyzer that can quickly scan your entire codebase and produce a comprehensive report. This is useful for onboarding, understanding unfamiliar code, and providing context to the AI.
+
+### Analyze Tool (AI-facing)
+
+The `analyze` tool is available for the AI model to use:
+
+```json
+{
+  "mode": "full|summary|graph",
+  "format": "text|mermaid|dot|json"
+}
+```
+
+- **`full`** — Complete analysis: file stats, line counts, Go packages, dependency graph, complexity estimate. Results are cached in `.glaw/analysis.json`.
+- **`summary`** — Quick overview from cached analysis (fast). Runs a fresh scan if no cache exists.
+- **`graph`** — Dependency graph only, in the requested format (Mermaid, DOT/Graphviz, or JSON adjacency list).
+
+### `/analyze` Command (REPL)
+
+```bash
+# Full analysis with summary + dependency graph
+/analyze
+
+# Quick summary from cached data
+/analyze summary
+
+# Dependency graph in Mermaid format
+/analyze graph mermaid
+
+# Dependency graph in DOT/Graphviz format
+/analyze graph dot
+
+# Dependency graph as JSON adjacency list
+/analyze graph json
+```
+
+The analysis output includes:
+- **Project Structure** — total files, directories, source/test/doc/config file counts
+- **Lines of Code** — code, comments, and blank lines
+- **File Type Distribution** — visual bar chart of file types
+- **Infrastructure Detection** — go.mod, package.json, Dockerfile, Makefile, CI config
+- **Go Package Analysis** — per-package stats: files, lines, functions, types, exported symbols, test coverage
+- **Dependency Graph** — internal package dependencies rendered as Mermaid or DOT graph
+- **Complexity Estimate** — small/medium/large based on size and structure
+
+Analysis results are saved to `.glaw/analysis.json` for fast retrieval on subsequent requests.
 
 ## Permission Modes
 

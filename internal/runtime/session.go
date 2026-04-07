@@ -79,6 +79,22 @@ func (s *spinner) Stop() {
 	<-s.stopped
 }
 
+// Hide temporarily hides the spinner (clears the line) without stopping it.
+// Call Show to restore it.
+func (s *spinner) Hide() {
+	fmt.Print("\r\033[K")
+}
+
+// Show restores the spinner after a Hide call.
+func (s *spinner) Show() {
+	s.mu.Lock()
+	label := s.label
+	frame := spinnerFrames[s.frame%len(spinnerFrames)]
+	s.frame++
+	s.mu.Unlock()
+	fmt.Printf("\r\033[36m%s\033[0m %s", frame, label)
+}
+
 // ANSI codes for terminal output
 const (
 	ansiReset   = "\033[0m"
@@ -236,7 +252,10 @@ func (s *Session) MessageCount() int {
 
 // AsAPIMessages converts session messages to API format.
 // It ensures tool_result blocks are in user messages (per Anthropic API spec)
-// and filters out any empty content blocks.
+// and sanitizes content blocks to prevent API errors.
+// The ContentBlock.MarshalJSON method handles the primary defense against
+// nil/empty required fields, but this method provides additional cleanup
+// for data loaded from persisted sessions.
 func (s *Session) AsAPIMessages() []api.Message {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -247,14 +266,27 @@ func (s *Session) AsAPIMessages() []api.Message {
 			continue
 		}
 
-		// Ensure content blocks don't have nil fields that could cause API errors
 		cleanBlocks := make([]api.ContentBlock, 0, len(m.Blocks))
 		for _, b := range m.Blocks {
-			// Ensure tool_use blocks have non-nil Input
-			if b.Type == api.ContentToolUse && b.Input == nil {
-				b.Input = json.RawMessage(`{}`)
+			switch b.Type {
+			case api.ContentToolUse:
+				// Ensure tool_use blocks have non-nil Input
+				if b.Input == nil {
+					b.Input = json.RawMessage(`{}`)
+				}
+			case api.ContentToolResult:
+				// Ensure tool_result blocks have a non-empty ToolUseID.
+				// Empty content is handled by MarshalJSON but we guard
+				// against missing ToolUseID here.
+				if b.ToolUseID == "" {
+					continue
+				}
 			}
 			cleanBlocks = append(cleanBlocks, b)
+		}
+
+		if len(cleanBlocks) == 0 {
+			continue
 		}
 
 		msgs = append(msgs, api.Message{

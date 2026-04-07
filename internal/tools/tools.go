@@ -127,6 +127,11 @@ func (r *Registry) registerBuiltinTools() {
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["read","write"],"description":"Whether to read or write the setting"},"path":{"type":"string","description":"Dot-separated path to the setting (e.g. permissions.mode)"},"value":{"description":"Value to write (any JSON type)"}},"required":["action","path"]}`),
 		}, r.configTool},
 			{api.ToolDefinition{
+				Name:        "analyze",
+				Description: "Analyze the project source code to produce a comprehensive summary, dependency graph, and code statistics. Results are saved to .glaw/analysis.json for quick retrieval later.",
+				InputSchema: json.RawMessage(`{"type":"object","properties":{"mode":{"type":"string","enum":["full","summary","graph"],"description":"Analysis mode: full (complete analysis), summary (quick overview), graph (dependency graph only)","default":"full"},"format":{"type":"string","enum":["text","mermaid","dot","json"],"description":"Output format for dependency graph: text, mermaid, dot, or json","default":"text"}},"required":[]}`),
+			}, r.analyzeTool},
+		{api.ToolDefinition{
 				Name:        "lsp_go_to_definition",
 				Description: "Find where a symbol is defined using LSP",
 				InputSchema: json.RawMessage(`{"type":"object","properties":{"file_path":{"type":"string","description":"Absolute path to the file"},"line":{"type":"integer","description":"0-indexed line number"},"character":{"type":"integer","description":"0-indexed character offset"}},"required":["file_path","line","character"]}`),
@@ -232,6 +237,39 @@ func (r *Registry) bashTool(ctx context.Context, input json.RawMessage) (*runtim
 	cmd := exec.CommandContext(ctx, "bash", "-c", args.Command)
 	cmd.Dir = r.workspaceRoot
 
+	// Check if the command likely needs interactive terminal access
+	// (password prompts, sudo, etc.) — these need direct terminal I/O.
+	// For most commands, capture output as before.
+	needsTerminal := isInteractiveCommand(args.Command)
+
+	if needsTerminal {
+		// Connect directly to terminal for interactive commands
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		// Clear the spinner line before running the command
+		fmt.Print("\r\033[K")
+
+		err := cmd.Run()
+		fmt.Println() // separate from next spinner
+
+		if ctx.Err() == context.DeadlineExceeded {
+			return &runtime.ToolOutput{
+				Content: fmt.Sprintf("Command timed out after %v", timeout),
+				IsError: true,
+			}, nil
+		}
+		if err != nil {
+			return &runtime.ToolOutput{
+				Content: fmt.Sprintf("Command failed: %v", err),
+				IsError: true,
+			}, nil
+		}
+		return &runtime.ToolOutput{Content: "(command completed)", IsError: false}, nil
+	}
+
+	// Standard: capture stdout and stderr
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -257,6 +295,33 @@ func (r *Registry) bashTool(ctx context.Context, input json.RawMessage) (*runtim
 	}
 
 	return &runtime.ToolOutput{Content: output, IsError: false}, nil
+}
+
+// isInteractiveCommand checks if a bash command likely needs terminal interaction.
+func isInteractiveCommand(cmd string) bool {
+	// Commands that commonly need user input
+	interactivePatterns := []string{
+		"sudo ", "passwd", "ssh ", "scp ", "rsync ",
+		"docker login", "docker push", "docker pull",
+		"gh auth login", "gh auth setup-git",
+		"git push", "git pull", "git clone",
+		"npm login", "npm publish",
+		"read ", "read -p", "read -s",
+		"openssl req", "openssl pkcs12",
+		"gpg ", "gpg2 ",
+		"keytool ", "security ",
+		"su ", "su -",
+		"login ",
+		"curl -u", // curl with user auth may prompt for password
+		"mysql -p", "psql -W", "pg_dump -W",
+	}
+	cmdLower := strings.ToLower(cmd)
+	for _, pattern := range interactivePatterns {
+		if strings.Contains(cmdLower, strings.ToLower(pattern)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Registry) readFileTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
@@ -742,6 +807,1055 @@ func (r *Registry) toolSearchTool(ctx context.Context, input json.RawMessage) (*
 	}
 
 	return &runtime.ToolOutput{Content: strings.TrimSpace(sb.String()), IsError: false}, nil
+}
+
+func (r *Registry) analyzeTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
+	var args struct {
+		Mode   string `json:"mode"`
+		Format string `json:"format"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
+	}
+	if args.Mode == "" {
+		args.Mode = "full"
+	}
+	if args.Format == "" {
+		args.Format = "text"
+	}
+
+	glawDir := filepath.Join(r.workspaceRoot, ".glaw")
+	analysisPath := filepath.Join(glawDir, "analysis.json")
+
+	switch args.Mode {
+	case "summary":
+		cached, err := loadAnalysis(analysisPath)
+		if err == nil && cached != nil {
+			return &runtime.ToolOutput{
+				Content: fmt.Sprintf("Project Summary (cached from %s):\n\n%s", cached.Timestamp, cached.FormatSummary()),
+				IsError: false,
+			}, nil
+		}
+		result := r.performAnalysis()
+		if result == nil {
+			return &runtime.ToolOutput{Content: "Analysis produced no results.", IsError: true}, nil
+		}
+		return &runtime.ToolOutput{Content: result.FormatSummary(), IsError: false}, nil
+
+	case "graph":
+		result := r.performAnalysis()
+		if result == nil {
+			return &runtime.ToolOutput{Content: "Analysis produced no results.", IsError: true}, nil
+		}
+		result.Save(analysisPath)
+		return &runtime.ToolOutput{Content: result.FormatGraph(args.Format), IsError: false}, nil
+
+	case "full", "":
+		result := r.performAnalysis()
+		if result == nil {
+			return &runtime.ToolOutput{Content: "Analysis produced no results.", IsError: true}, nil
+		}
+		if err := result.Save(analysisPath); err != nil {
+			// still return result, just note cache failure
+		}
+		output := result.FormatSummary()
+		if args.Format == "text" {
+			output += "── Dependency Graph (Mermaid) ─────────────\n```mermaid\n" + result.Graph.Mermaid + "```\n"
+		} else {
+			output += "\n" + result.FormatGraph(args.Format)
+		}
+		output += fmt.Sprintf("\nAnalysis saved to .glaw/analysis.json\n")
+		return &runtime.ToolOutput{Content: output, IsError: false}, nil
+
+	default:
+		return &runtime.ToolOutput{
+			Content: fmt.Sprintf("Invalid mode %q; must be full, summary, or graph", args.Mode),
+			IsError: true,
+		}, nil
+	}
+}
+
+// ---------- Language-agnostic analysis types ----------
+
+// analysisResult holds the complete analysis of a project.
+type analysisResult struct {
+	Timestamp    string             `json:"timestamp"`
+	RootPath     string             `json:"root_path"`
+	Summary      analysisSummary    `json:"summary"`
+	Modules      []moduleInfo       `json:"modules"`
+	Dependencies []dependency       `json:"dependencies"`
+	FileTypes    []fileTypeStat     `json:"file_types"`
+	Graph        analysisGraph      `json:"graph"`
+}
+
+type analysisSummary struct {
+	ProjectName         string   `json:"project_name"`
+	PrimaryLanguage     string   `json:"primary_language"`
+	Languages           []string `json:"languages"`
+	TotalFiles          int      `json:"total_files"`
+	TotalDirs           int      `json:"total_dirs"`
+	TotalLines          int      `json:"total_lines"`
+	TotalCodeLines      int      `json:"total_code_lines"`
+	TotalCommentLines   int      `json:"total_comment_lines"`
+	TotalBlankLines     int      `json:"total_blank_lines"`
+	SourceFiles         int      `json:"source_files"`
+	TestFiles           int      `json:"test_files"`
+	DocFiles            int      `json:"doc_files"`
+	ConfigFiles         int      `json:"config_files"`
+	TopLevelDirs        []string `json:"top_level_dirs"`
+	HasGoMod            bool     `json:"has_go_mod"`
+	HasPackageJSON      bool     `json:"has_package_json"`
+	HasPipRequirements  bool     `json:"has_pip_requirements"`
+	HasPyprojectToml    bool     `json:"has_pyproject_toml"`
+	HasCargoToml        bool     `json:"has_cargo_toml"`
+	HasPomXml           bool     `json:"has_pom_xml"`
+	HasBuildGradle      bool     `json:"has_build_gradle"`
+	HasGemfile          bool     `json:"has_gemfile"`
+	HasCSProj           bool     `json:"has_csproj"`
+	HasDockerfile       bool     `json:"has_dockerfile"`
+	HasMakefile         bool     `json:"has_makefile"`
+	HasCI               bool     `json:"has_ci"`
+	ModuleCount         int      `json:"module_count"`
+	EstimatedComplexity string   `json:"estimated_complexity"`
+}
+
+type moduleInfo struct {
+	Path          string   `json:"path"`
+	Language      string   `json:"language"`
+	Files         []string `json:"files"`
+	Imports       []string `json:"imports"`
+	LineCount     int      `json:"line_count"`
+	HasTests      bool     `json:"has_tests"`
+	FunctionCount int      `json:"function_count"`
+}
+
+type dependency struct {
+	From    string `json:"from"`
+	To      string `json:"to"`
+	Type    string `json:"type"` // "internal", "external", "standard"
+	Details string `json:"details,omitempty"`
+}
+
+type fileTypeStat struct {
+	Extension string  `json:"extension"`
+	Count     int     `json:"count"`
+	Lines     int     `json:"lines"`
+	Percentage float64 `json:"percentage"`
+}
+
+type analysisGraph struct {
+	Mermaid   string              `json:"mermaid"`
+	Adjacency map[string][]string `json:"adjacency"`
+	DOT       string              `json:"dot"`
+}
+
+// ---------- Analysis helpers ----------
+
+// langRules defines per-language rules for import scanning, test detection, etc.
+var langRules = map[string]struct {
+	Extensions      []string
+	TestPatterns    []string
+	CommentLine     []string
+	CommentBlockO   []string // block comment open
+	CommentBlockC   []string // block comment close
+	ImportRegex     string
+	ModuleFile      string
+	ProjectFile     string // top-level project manifest
+}{
+	"go": {
+		Extensions:   []string{".go"},
+		TestPatterns: []string{"_test.go"},
+		CommentLine:  []string{"//"},
+		CommentBlockO: []string{"/*"},
+		CommentBlockC: []string{"*/"},
+		ImportRegex:  `(?m)^\s*"\s*([^"]+)"\s*$`,
+		ModuleFile:   "go.mod",
+	},
+	"python": {
+		Extensions:   []string{".py", ".pyw"},
+		TestPatterns: []string{"test_", "test_", "_test.py"},
+		CommentLine:  []string{"#"},
+		ImportRegex:  `(?m)^\s*(?:from|import)\s+([a-zA-Z_][\w.]*)`,
+		ProjectFile:  "pyproject.toml",
+	},
+	"javascript": {
+		Extensions:   []string{".js", ".mjs", ".cjs"},
+		TestPatterns: []string{".test.", ".spec."},
+		CommentLine:  []string{"//"},
+		CommentBlockO: []string{"/*"},
+		CommentBlockC: []string{"*/"},
+		ImportRegex:  `(?:require\(|import\s+.*?\s+from\s+|import\s+)['"]([^./][^'"]*)['"]`,
+	},
+	"typescript": {
+		Extensions:   []string{".ts", ".tsx", ".cts", ".mts"},
+		TestPatterns: []string{".test.", ".spec."},
+		CommentLine:  []string{"//"},
+		CommentBlockO: []string{"/*"},
+		CommentBlockC: []string{"*/"},
+		ImportRegex:  `(?:require\(|import\s+.*?\s+from\s+|import\s+)['"]([^./][^'"]*)['"]`,
+	},
+	"rust": {
+		Extensions:   []string{".rs"},
+		TestPatterns: []string{},
+		CommentLine:  []string{"//", "///", "//!"},
+		CommentBlockO: []string{"/*", "/*!"},
+		CommentBlockC: []string{"*/"},
+		ImportRegex:  `(?m)^\s*(?:use|pub\s+use)\s+([^;{]+)`,
+		ModuleFile:   "Cargo.toml",
+	},
+	"java": {
+		Extensions:   []string{".java"},
+		TestPatterns: []string{"Test.java", "Tests.java", "IT.java"},
+		CommentLine:  []string{"//"},
+		CommentBlockO: []string{"/*", "/**"},
+		CommentBlockC: []string{"*/"},
+		ImportRegex:  `(?m)^\s*import\s+(?:static\s+)?([^;]+)`,
+	},
+	"ruby": {
+		Extensions:   []string{".rb", ".rake"},
+		TestPatterns: []string{"_test.rb", "_spec.rb"},
+		CommentLine:  []string{"#"},
+		ImportRegex:  `(?m)^\s*(?:require|require_relative|gem)\s+['"]([^'"]+)['"]`,
+	},
+	"csharp": {
+		Extensions:   []string{".cs"},
+		TestPatterns: []string{"Test.cs", "Tests.cs"},
+		CommentLine:  []string{"//"},
+		CommentBlockO: []string{"/*"},
+		CommentBlockC: []string{"*/"},
+		ImportRegex:  `(?m)^\s*using\s+([^;]+)`,
+	},
+	"cpp": {
+		Extensions:   []string{".cpp", ".cc", ".cxx", ".c", ".h", ".hpp", ".hxx"},
+		TestPatterns: []string{"_test.", "test_"},
+		CommentLine:  []string{"//"},
+		CommentBlockO: []string{"/*"},
+		CommentBlockC: []string{"*/"},
+		ImportRegex:  `(?m)^\s*#\s*include\s*[<"]([^>"]+)[>"]`,
+	},
+	"swift": {
+		Extensions:   []string{".swift"},
+		TestPatterns: []string{"Tests.swift", "Test.swift"},
+		CommentLine:  []string{"//"},
+		CommentBlockO: []string{"/*"},
+		CommentBlockC: []string{"*/"},
+		ImportRegex:  `(?m)^\s*import\s+(\w+)`,
+	},
+	"kotlin": {
+		Extensions:   []string{".kt", ".kts"},
+		TestPatterns: []string{"Test.kt", "Tests.kt"},
+		CommentLine:  []string{"//"},
+		CommentBlockO: []string{"/*"},
+		CommentBlockC: []string{"*/"},
+		ImportRegex:  `(?m)^\s*import\s+([^;]+)`,
+	},
+	"php": {
+		Extensions:   []string{".php"},
+		TestPatterns: []string{"Test.php", "Tests.php"},
+		CommentLine:  []string{"//", "#"},
+		CommentBlockO: []string{"/*"},
+		CommentBlockC: []string{"*/"},
+		ImportRegex:  `(?m)^\s*(?:use|require|require_once|include|include_once)\s+[^;]*['"]([^'"]+)['"]`,
+	},
+	"scala": {
+		Extensions:   []string{".scala"},
+		TestPatterns: []string{"Spec.scala", "Test.scala"},
+		CommentLine:  []string{"//"},
+		CommentBlockO: []string{"/*"},
+		CommentBlockC: []string{"*/"},
+		ImportRegex:  `(?m)^\s*import\s+([^;{]+)`,
+	},
+}
+
+var analysisExcludeDirs = []string{
+	".git", "node_modules", "vendor", "dist", "build", "target",
+	"__pycache__", ".next", ".turbo", "bin", "obj", "out",
+	".glaw", ".cache", ".vscode", ".idea", ".tox", ".mypy_cache",
+	"venv", ".venv", "env", ".env", ".eggs", "eggs",
+	"coverage", ".coverage", ".pytest_cache", ".sass-cache",
+	"Pods", ".gradle", ".dart_tool",
+}
+
+var analysisExcludeFiles = []string{
+	"go.sum", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+	"Gemfile.lock", "composer.lock", "Cargo.lock", "poetry.lock",
+}
+
+// extToLang maps file extensions to language names.
+func extToLang(ext string) string {
+	for lang, rules := range langRules {
+		for _, e := range rules.Extensions {
+			if ext == e {
+				return lang
+			}
+		}
+	}
+	return ""
+}
+
+// isAnalysisExcludedDir checks if a directory name should be excluded.
+func isAnalysisExcludedDir(name string) bool {
+	for _, d := range analysisExcludeDirs {
+		if name == d {
+			return true
+		}
+	}
+	return false
+}
+
+// isAnalysisExcludedFile checks if a file name should be excluded.
+func isAnalysisExcludedFile(name string) bool {
+	for _, f := range analysisExcludeFiles {
+		if name == f {
+			return true
+		}
+	}
+	return false
+}
+
+// isAnalyzeTextFile returns true for extensions we count lines for.
+func isAnalyzeTextFile(ext string) bool {
+	for _, rules := range langRules {
+		for _, e := range rules.Extensions {
+			if ext == e {
+				return true
+			}
+		}
+	}
+	textExts := map[string]bool{
+		".json": true, ".yaml": true, ".yml": true, ".toml": true, ".xml": true,
+		".ini": true, ".cfg": true, ".conf": true, ".env": true,
+		".md": true, ".txt": true, ".rst": true, ".adoc": true,
+		".mod": true, ".sql": true, ".graphql": true, ".proto": true,
+		".html": true, ".css": true, ".scss": true, ".less": true,
+		".vue": true, ".svelte": true,
+		".sh": true, ".bash": true, ".zsh": true, ".fish": true,
+		"Makefile": true, "Dockerfile": true,
+		".gitignore": true, ".dockerignore": true, ".editorconfig": true,
+	}
+	return textExts[ext]
+}
+
+// isTestFile checks if a file name matches any language's test pattern.
+func isTestFile(name string) bool {
+	for _, rules := range langRules {
+		for _, pat := range rules.TestPatterns {
+			if strings.Contains(name, pat) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isSourceFile checks if a file extension belongs to any known language.
+func isSourceFile(ext string) bool {
+	return extToLang(ext) != ""
+}
+
+// isDocFile checks doc extensions.
+func isDocFile(ext string) bool {
+	return ext == ".md" || ext == ".txt" || ext == ".rst" || ext == ".adoc"
+}
+
+// isConfigFile checks config extensions.
+func isConfigFile(ext string) bool {
+	configs := map[string]bool{
+		".json": true, ".yaml": true, ".yml": true, ".toml": true,
+		".xml": true, ".ini": true, ".cfg": true, ".conf": true,
+		".env": true, ".mod": true, ".lock": true,
+		".gitignore": true, ".dockerignore": true, ".editorconfig": true,
+	}
+	return configs[ext]
+}
+
+// analyzeCountLines counts total/code/comment/blank lines with language-aware comment detection.
+func analyzeCountLines(path string, ext string) (total, code, comment, blank int) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, 0, 0, 0
+	}
+	lines := strings.Split(string(data), "\n")
+
+	lang := extToLang(ext)
+	var lineCommentStarts []string
+	var blockOpen, blockClose []string
+	if lang != "" {
+		rules := langRules[lang]
+		lineCommentStarts = rules.CommentLine
+		blockOpen = rules.CommentBlockO
+		blockClose = rules.CommentBlockC
+	}
+	// Default fallback
+	if len(lineCommentStarts) == 0 && lang == "" {
+		lineCommentStarts = []string{"#", "//"}
+	}
+
+	inBlock := false
+	for _, line := range lines {
+		total++
+		t := strings.TrimSpace(line)
+		if t == "" {
+			blank++
+			continue
+		}
+		if inBlock {
+			comment++
+			for _, c := range blockClose {
+				if strings.Contains(t, c) {
+					inBlock = false
+					break
+				}
+			}
+			continue
+		}
+		// Check block comment open
+		for _, bo := range blockOpen {
+			if strings.HasPrefix(t, bo) {
+				comment++
+				matched := false
+				for _, bc := range blockClose {
+					if strings.Contains(t[len(bo):], bc) {
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					inBlock = true
+				}
+				goto nextLine
+			}
+		}
+		// Check line comment
+		for _, lc := range lineCommentStarts {
+			if strings.HasPrefix(t, lc) {
+				comment++
+				goto nextLine
+			}
+		}
+		// <!-- for HTML/XML
+		if strings.HasPrefix(t, "<!--") {
+			comment++
+			if !strings.Contains(t[4:], "-->") {
+				inBlock = true
+			}
+			continue
+		}
+		code++
+		continue
+	nextLine:
+	}
+	return total, code, comment, blank
+}
+
+// countFunctions approximates function/method count via regex per language.
+func countFunctions(data string, lang string) int {
+	var re *regexp.Regexp
+	switch lang {
+	case "go":
+		re = regexp.MustCompile(`(?m)^\s*func\s+`)
+	case "python":
+		re = regexp.MustCompile(`(?m)^\s*def\s+`)
+	case "javascript", "typescript":
+		re = regexp.MustCompile(`(?m)(?:function\s+\w+|(?:const|let|var)\s+\w+\s*=\s*(?:async\s+)?(?:\([^)]*\)|[\w]*)\s*=>|(?:async\s+)?\w+\s*\([^)]*\)\s*\{)`)
+	case "rust":
+		re = regexp.MustCompile(`(?m)^\s*(?:pub\s+)?(?:async\s+)?fn\s+`)
+	case "java", "kotlin", "scala":
+		re = regexp.MustCompile(`(?m)^\s*(?:public|private|protected|static|final|abstract|override|open|suspend|inline)*\s*(?:\w+\s+)+(\w+)\s*\(`)
+	case "ruby":
+		re = regexp.MustCompile(`(?m)^\s*def\s+`)
+	case "csharp":
+		re = regexp.MustCompile(`(?m)^\s*(?:public|private|protected|internal|static|virtual|override|async)*\s*(?:\w+\s+)+(\w+)\s*\(`)
+	case "cpp":
+		re = regexp.MustCompile(`(?m)(?:\w+[\s*&]+)+(\w+)\s*\([^)]*\)\s*\{`)
+	case "swift":
+		re = regexp.MustCompile(`(?m)^\s*(?:public|private|internal|open|static|override\s+)?func\s+`)
+	case "php":
+		re = regexp.MustCompile(`(?m)^\s*(?:public|private|protected|static)?\s*function\s+`)
+	default:
+		return 0
+	}
+	if re == nil {
+		return 0
+	}
+	return len(re.FindAllString(data, -1))
+}
+
+// extractImports scans a file and returns external imports/dependencies.
+func extractImports(data string, lang string) []string {
+	rules, ok := langRules[lang]
+	if !ok || rules.ImportRegex == "" {
+		return nil
+	}
+	re := regexp.MustCompile(rules.ImportRegex)
+	matches := re.FindAllStringSubmatch(data, -1)
+	var imports []string
+	for _, m := range matches {
+		if len(m) > 1 {
+			imp := strings.TrimSpace(m[1])
+			if imp != "" {
+				imports = append(imports, imp)
+			}
+		}
+	}
+	return imports
+}
+
+// scanImportsInFile reads a file and extracts imports using language rules.
+func scanImportsInFile(path string, lang string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	return extractImports(string(data), lang)
+}
+
+// performAnalysis runs a full language-agnostic analysis on the workspace.
+func (r *Registry) performAnalysis() *analysisResult {
+	result := &analysisResult{
+		Timestamp: time.Now().Format(time.RFC3339),
+		RootPath:  r.workspaceRoot,
+	}
+	s := &result.Summary
+	s.ProjectName = filepath.Base(r.workspaceRoot)
+	s.TopLevelDirs = []string{}
+	s.Languages = []string{}
+
+	// Detect infrastructure
+	s.HasGoMod = analysisFileExists(filepath.Join(r.workspaceRoot, "go.mod"))
+	s.HasPackageJSON = analysisFileExists(filepath.Join(r.workspaceRoot, "package.json"))
+	s.HasPipRequirements = analysisFileExists(filepath.Join(r.workspaceRoot, "requirements.txt"))
+	s.HasPyprojectToml = analysisFileExists(filepath.Join(r.workspaceRoot, "pyproject.toml"))
+	s.HasCargoToml = analysisFileExists(filepath.Join(r.workspaceRoot, "Cargo.toml"))
+	s.HasPomXml = analysisFileExists(filepath.Join(r.workspaceRoot, "pom.xml"))
+	s.HasBuildGradle = analysisFileExists(filepath.Join(r.workspaceRoot, "build.gradle")) ||
+		analysisFileExists(filepath.Join(r.workspaceRoot, "build.gradle.kts"))
+	s.HasGemfile = analysisFileExists(filepath.Join(r.workspaceRoot, "Gemfile"))
+	s.HasCSProj = analysisGlobExists(r.workspaceRoot, "*.csproj")
+	s.HasDockerfile = analysisFileExists(filepath.Join(r.workspaceRoot, "Dockerfile")) ||
+		analysisGlobExists(r.workspaceRoot, "Dockerfile.*")
+	s.HasMakefile = analysisFileExists(filepath.Join(r.workspaceRoot, "Makefile"))
+	s.HasCI = analysisFileExists(filepath.Join(r.workspaceRoot, ".github", "workflows")) ||
+		analysisFileExists(filepath.Join(r.workspaceRoot, ".gitlab-ci.yml")) ||
+		analysisFileExists(filepath.Join(r.workspaceRoot, "Jenkinsfile"))
+
+	// Walk directory tree
+	extMap := make(map[string]*fileTypeStat)
+	dirSet := make(map[string]bool)
+	// moduleMap: dir -> moduleInfo (group files by directory per language)
+	moduleMap := make(map[string]*moduleInfo)
+
+	filepath.WalkDir(r.workspaceRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		relPath, relErr := filepath.Rel(r.workspaceRoot, path)
+		if relErr != nil {
+			return nil
+		}
+
+		if d.IsDir() {
+			if relPath != "." && isAnalysisExcludedDir(filepath.Base(path)) {
+				return filepath.SkipDir
+			}
+			if relPath != "." {
+				s.TotalDirs++
+				parts := strings.Split(relPath, string(filepath.Separator))
+				dirSet[parts[0]] = true
+			}
+			return nil
+		}
+
+		if isAnalysisExcludedFile(filepath.Base(path)) {
+			return nil
+		}
+
+		s.TotalFiles++
+		ext := strings.ToLower(filepath.Ext(path))
+		if ext == "" {
+			base := filepath.Base(path)
+			switch base {
+			case "Makefile", "Dockerfile", "Jenkinsfile", "Vagrantfile":
+				ext = base
+			default:
+				ext = "other"
+			}
+		}
+
+		ft, ok := extMap[ext]
+		if !ok {
+			ft = &fileTypeStat{Extension: ext}
+			extMap[ext] = ft
+		}
+		ft.Count++
+
+		// Count lines
+		if isAnalyzeTextFile(ext) {
+			total, code, comment, blank := analyzeCountLines(path, ext)
+			ft.Lines += total
+			s.TotalLines += total
+			s.TotalCodeLines += code
+			s.TotalCommentLines += comment
+			s.TotalBlankLines += blank
+		}
+
+		// Classify
+		base := filepath.Base(path)
+		lang := extToLang(ext)
+		switch {
+		case lang != "" && isTestFile(base):
+			s.TestFiles++
+			s.SourceFiles++
+		case lang != "":
+			s.SourceFiles++
+		case isDocFile(ext):
+			s.DocFiles++
+		case isConfigFile(ext):
+			s.ConfigFiles++
+		}
+
+		// Build per-directory modules for source files
+		if lang != "" {
+			dir := filepath.Dir(path)
+			relDir, _ := filepath.Rel(r.workspaceRoot, dir)
+			if relDir == "." {
+				relDir = "(root)"
+			}
+			key := lang + "::" + relDir
+			mod, ok := moduleMap[key]
+			if !ok {
+				mod = &moduleInfo{
+					Path:     relDir,
+					Language: lang,
+					Files:    []string{},
+					Imports:  []string{},
+				}
+				moduleMap[key] = mod
+			}
+			mod.Files = append(mod.Files, filepath.Base(path))
+			if isTestFile(base) {
+				mod.HasTests = true
+			}
+			if total, _, _, _ := analyzeCountLines(path, ext); total > 0 {
+				mod.LineCount += total
+			}
+			// Scan imports
+			imports := scanImportsInFile(path, lang)
+			for _, imp := range imports {
+				found := false
+				for _, existing := range mod.Imports {
+					if existing == imp {
+						found = true
+						break
+					}
+				}
+				if !found {
+					mod.Imports = append(mod.Imports, imp)
+				}
+			}
+			// Count functions
+			if data, err := os.ReadFile(path); err == nil {
+				mod.FunctionCount += countFunctions(string(data), lang)
+			}
+		}
+		return nil
+	})
+
+	// Convert ext map
+	for _, ft := range extMap {
+		result.FileTypes = append(result.FileTypes, *ft)
+	}
+	sort.Slice(result.FileTypes, func(i, j int) bool {
+		return result.FileTypes[i].Count > result.FileTypes[j].Count
+	})
+	totalF := s.TotalFiles
+	if totalF == 0 {
+		totalF = 1
+	}
+	for i := range result.FileTypes {
+		result.FileTypes[i].Percentage = float64(result.FileTypes[i].Count) / float64(totalF) * 100
+	}
+
+	// Top-level dirs
+	for dir := range dirSet {
+		s.TopLevelDirs = append(s.TopLevelDirs, dir)
+	}
+	sort.Strings(s.TopLevelDirs)
+
+	// Detect languages
+	langCounts := make(map[string]int)
+	for ext, ft := range extMap {
+		lang := extToLang(ext)
+		if lang != "" {
+			langCounts[lang] += ft.Count
+		}
+	}
+	type langCount struct{ lang string; count int }
+	var lcs []langCount
+	for l, c := range langCounts {
+		lcs = append(lcs, langCount{l, c})
+	}
+	sort.Slice(lcs, func(i, j int) bool { return lcs[i].count > lcs[j].count })
+	for _, lc := range lcs {
+		s.Languages = append(s.Languages, lc.lang)
+	}
+	if len(lcs) > 0 {
+		s.PrimaryLanguage = lcs[0].lang
+	}
+
+	// Convert modules
+	for _, mod := range moduleMap {
+		sort.Strings(mod.Files)
+		sort.Strings(mod.Imports)
+		result.Modules = append(result.Modules, *mod)
+	}
+	sort.Slice(result.Modules, func(i, j int) bool {
+		return result.Modules[i].Path < result.Modules[i].Path
+	})
+	s.ModuleCount = len(result.Modules)
+
+	// Build dependency graph
+	buildAnalysisGraph(result)
+
+	// Compute complexity
+	computeAnalysisComplexity(result)
+
+	return result
+}
+
+func buildAnalysisGraph(result *analysisResult) {
+	adj := make(map[string][]string)
+	importSeen := make(map[string]bool)
+
+	for _, mod := range result.Modules {
+		for _, imp := range mod.Imports {
+			depType := "external"
+			if isStandardLib(imp, mod.Language) {
+				depType = "standard"
+			}
+			// Internal deps: other modules in the same project
+			isInternal := false
+			for _, other := range result.Modules {
+				if other.Path == mod.Path {
+					continue
+				}
+				if strings.Contains(imp, filepath.Base(other.Path)) || strings.HasPrefix(imp, other.Path) {
+					isInternal = true
+				}
+			}
+			if isInternal {
+				depType = "internal"
+			}
+
+			dep := dependency{From: mod.Path, To: imp, Type: depType}
+			key := dep.From + "|" + dep.To
+			if !importSeen[key] {
+				importSeen[key] = true
+				result.Dependencies = append(result.Dependencies, dep)
+			}
+
+			if depType == "internal" || isInternal {
+				from := mermaidSafe(mod.Path)
+				to := mermaidSafe(imp)
+				adj[from] = append(adj[from], to)
+			}
+		}
+	}
+
+	// Deduplicate
+	for k, v := range adj {
+		seen := make(map[string]bool)
+		unique := v[:0]
+		for _, s := range v {
+			if !seen[s] {
+				seen[s] = true
+				unique = append(unique, s)
+			}
+		}
+		sort.Strings(unique)
+		adj[k] = unique
+	}
+
+	// Mermaid
+	var mermaid strings.Builder
+	mermaid.WriteString("graph TD\n")
+	nodes := make([]string, 0, len(adj))
+	for k := range adj {
+		nodes = append(nodes, k)
+	}
+	sort.Strings(nodes)
+	for _, node := range nodes {
+		for _, dep := range adj[node] {
+			mermaid.WriteString(fmt.Sprintf("    %s --> %s\n", node, dep))
+		}
+	}
+	// Add isolated modules
+	for _, mod := range result.Modules {
+		safe := mermaidSafe(mod.Path)
+		if _, ok := adj[safe]; !ok {
+			mermaid.WriteString(fmt.Sprintf("    %s\n", safe))
+		}
+	}
+
+	// DOT
+	var dot strings.Builder
+	dot.WriteString("digraph project {\n")
+	dot.WriteString("    rankdir=TD;\n")
+	dot.WriteString("    node [shape=box, style=filled, fillcolor=lightblue];\n")
+	for _, node := range nodes {
+		for _, dep := range adj[node] {
+			dot.WriteString(fmt.Sprintf("    \"%s\" -> \"%s\";\n", node, dep))
+		}
+	}
+	dot.WriteString("}\n")
+
+	result.Graph = analysisGraph{
+		Mermaid:   mermaid.String(),
+		Adjacency: adj,
+		DOT:       dot.String(),
+	}
+}
+
+// isStandardLib returns true for known standard library prefixes per language.
+func isStandardLib(imp string, lang string) bool {
+	switch lang {
+	case "go":
+		stdGo := []string{"fmt", "os", "io", "net", "http", "strings", "strconv", "time",
+			"encoding", "context", "sync", "path", "filepath", "bufio", "bytes",
+			"errors", "math", "regexp", "sort", "json", "log", "runtime", "reflect",
+			"unicode", "crypto", "hash", "testing", "flag", "template", "html",
+			"database", "sql", "compress", "archive", "debug", "plugin", "unsafe"}
+		for _, prefix := range stdGo {
+			if imp == prefix || strings.HasPrefix(imp, prefix+"/") {
+				return true
+			}
+		}
+	case "python":
+		stdPy := []string{"os", "sys", "json", "re", "time", "datetime", "math",
+			"collections", "itertools", "functools", "pathlib", "logging",
+			"unittest", "argparse", "subprocess", "threading", "asyncio",
+			"dataclasses", "typing", "abc", "io", "csv", "hashlib", "copy",
+			"struct", "socket", "http", "urllib", "email", "html", "xml",
+			"sqlite3", "random", "string", "shutil", "tempfile", "pickle"}
+		parts := strings.Split(imp, ".")
+		for _, prefix := range stdPy {
+			if parts[0] == prefix {
+				return true
+			}
+		}
+	case "rust":
+		if imp == "std" || strings.HasPrefix(imp, "std::") {
+			return true
+		}
+	case "java":
+		if strings.HasPrefix(imp, "java.") || strings.HasPrefix(imp, "javax.") ||
+			strings.HasPrefix(imp, "sun.") {
+			return true
+		}
+	case "csharp":
+		if strings.HasPrefix(imp, "System") || strings.HasPrefix(imp, "Microsoft.") {
+			return true
+		}
+	case "ruby":
+		stdRb := []string{"json", "csv", "fileutils", "optparse", "logger", "time",
+			"date", "uri", "net", "open-uri", "pathname", "tempfile", "socket",
+			"digest", "benchmark", "set", "singleton", "forwardable"}
+		for _, prefix := range stdRb {
+			if imp == prefix || strings.HasPrefix(imp, prefix+"/") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func computeAnalysisComplexity(result *analysisResult) {
+	s := &result.Summary
+	score := 0
+	if s.TotalFiles > 50 {
+		score += 2
+	} else if s.TotalFiles > 20 {
+		score += 1
+	}
+	if s.TotalLines > 10000 {
+		score += 2
+	} else if s.TotalLines > 3000 {
+		score += 1
+	}
+	if s.ModuleCount > 10 {
+		score += 2
+	} else if s.ModuleCount > 5 {
+		score += 1
+	}
+	if s.HasDockerfile {
+		score++
+	}
+	if s.HasCI {
+		score++
+	}
+	if len(s.TopLevelDirs) > 8 {
+		score++
+	}
+	switch {
+	case score >= 7:
+		s.EstimatedComplexity = "large"
+	case score >= 4:
+		s.EstimatedComplexity = "medium"
+	default:
+		s.EstimatedComplexity = "small"
+	}
+}
+
+func analysisFileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func analysisGlobExists(dir string, pattern string) bool {
+	matches, _ := filepath.Glob(filepath.Join(dir, pattern))
+	return len(matches) > 0
+}
+
+func mermaidSafe(s string) string {
+	re := regexp.MustCompile(`[^a-zA-Z0-9_]`)
+	return re.ReplaceAllString(s, "_")
+}
+
+// ---------- analysisResult formatting ----------
+
+func (r *analysisResult) FormatSummary() string {
+	var sb strings.Builder
+	s := &r.Summary
+
+	sb.WriteString("═══════════════════════════════════════════\n")
+	sb.WriteString("          PROJECT ANALYSIS REPORT          \n")
+	sb.WriteString("═══════════════════════════════════════════\n\n")
+
+	sb.WriteString(fmt.Sprintf("Project:      %s\n", s.ProjectName))
+	sb.WriteString(fmt.Sprintf("Language:     %s\n", s.PrimaryLanguage))
+	if len(s.Languages) > 1 {
+		sb.WriteString(fmt.Sprintf("Languages:    %s\n", strings.Join(s.Languages, ", ")))
+	}
+	sb.WriteString(fmt.Sprintf("Complexity:   %s\n", s.EstimatedComplexity))
+	sb.WriteString(fmt.Sprintf("Analyzed:     %s\n", r.Timestamp))
+	sb.WriteString("\n")
+
+	sb.WriteString("── Structure ──────────────────────────────\n")
+	sb.WriteString(fmt.Sprintf("Total Files:     %d\n", s.TotalFiles))
+	sb.WriteString(fmt.Sprintf("  Source Files:  %d\n", s.SourceFiles))
+	sb.WriteString(fmt.Sprintf("  Test Files:    %d\n", s.TestFiles))
+	sb.WriteString(fmt.Sprintf("  Doc Files:     %d\n", s.DocFiles))
+	sb.WriteString(fmt.Sprintf("  Config Files:  %d\n", s.ConfigFiles))
+	sb.WriteString(fmt.Sprintf("Directories:     %d\n", s.TotalDirs))
+	if s.ModuleCount > 0 {
+		sb.WriteString(fmt.Sprintf("Modules:         %d\n", s.ModuleCount))
+	}
+	sb.WriteString("\n")
+
+	sb.WriteString("── Lines of Code ──────────────────────────\n")
+	sb.WriteString(fmt.Sprintf("Total Lines:     %d\n", s.TotalLines))
+	sb.WriteString(fmt.Sprintf("  Code:          %d\n", s.TotalCodeLines))
+	sb.WriteString(fmt.Sprintf("  Comments:      %d\n", s.TotalCommentLines))
+	sb.WriteString(fmt.Sprintf("  Blank:         %d\n", s.TotalBlankLines))
+	sb.WriteString("\n")
+
+	sb.WriteString("── Top-Level Directories ──────────────────\n")
+	for _, dir := range s.TopLevelDirs {
+		sb.WriteString(fmt.Sprintf("  %s/\n", dir))
+	}
+	sb.WriteString("\n")
+
+	sb.WriteString("── File Type Distribution ─────────────────\n")
+	for _, ft := range r.FileTypes {
+		if ft.Count > 0 {
+			bar := strings.Repeat("█", int(ft.Percentage/5))
+			sb.WriteString(fmt.Sprintf("  %-10s %3d files  %s (%.1f%%)\n", ft.Extension, ft.Count, bar, ft.Percentage))
+		}
+	}
+	sb.WriteString("\n")
+
+	sb.WriteString("── Infrastructure ─────────────────────────\n")
+	if s.HasGoMod { sb.WriteString("  ✓ go.mod\n") }
+	if s.HasPackageJSON { sb.WriteString("  ✓ package.json\n") }
+	if s.HasPipRequirements { sb.WriteString("  ✓ requirements.txt\n") }
+	if s.HasPyprojectToml { sb.WriteString("  ✓ pyproject.toml\n") }
+	if s.HasCargoToml { sb.WriteString("  ✓ Cargo.toml\n") }
+	if s.HasPomXml { sb.WriteString("  ✓ pom.xml\n") }
+	if s.HasBuildGradle { sb.WriteString("  ✓ build.gradle\n") }
+	if s.HasGemfile { sb.WriteString("  ✓ Gemfile\n") }
+	if s.HasCSProj { sb.WriteString("  ✓ .csproj\n") }
+	if s.HasDockerfile { sb.WriteString("  ✓ Dockerfile\n") }
+	if s.HasMakefile { sb.WriteString("  ✓ Makefile\n") }
+	if s.HasCI { sb.WriteString("  ✓ CI Config\n") }
+	sb.WriteString("\n")
+
+	if len(r.Modules) > 0 {
+		sb.WriteString("── Modules ────────────────────────────────\n")
+		for _, mod := range r.Modules {
+			sb.WriteString(fmt.Sprintf("  %-20s %-12s %d files, %d lines, %d funcs",
+				mod.Path, mod.Language, len(mod.Files), mod.LineCount, mod.FunctionCount))
+			if mod.HasTests {
+				sb.WriteString(" ✓ tested")
+			}
+			sb.WriteString("\n")
+		}
+		sb.WriteString("\n")
+	}
+
+	internalDeps := 0
+	externalDeps := 0
+	uniqueExternal := make(map[string]bool)
+	for _, dep := range r.Dependencies {
+		if dep.Type == "internal" {
+			internalDeps++
+		} else if dep.Type == "external" {
+			externalDeps++
+			uniqueExternal[dep.To] = true
+		}
+	}
+	sb.WriteString("── Dependencies ───────────────────────────\n")
+	sb.WriteString(fmt.Sprintf("  Internal:  %d\n", internalDeps))
+	sb.WriteString(fmt.Sprintf("  External:  %d unique\n", len(uniqueExternal)))
+	sb.WriteString("\n")
+
+	return sb.String()
+}
+
+func (r *analysisResult) FormatGraph(format string) string {
+	switch format {
+	case "mermaid", "mmd":
+		return r.Graph.Mermaid
+	case "dot", "graphviz":
+		return r.Graph.DOT
+	case "adjacency", "json":
+		data, _ := json.MarshalIndent(r.Graph.Adjacency, "", "  ")
+		return string(data)
+	default:
+		return r.Graph.Mermaid
+	}
+}
+
+func (r *analysisResult) Save(path string) error {
+	data, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling analysis: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("creating directory: %w", err)
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+func loadAnalysis(path string) (*analysisResult, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var result analysisResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 func (r *Registry) notebookEditTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {

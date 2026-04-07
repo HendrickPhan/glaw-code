@@ -41,6 +41,53 @@ type ContentBlock struct {
 	IsError   bool              `json:"is_error,omitempty"`
 }
 
+// MarshalJSON ensures that fields required by the Anthropic API are always
+// present, even when empty. Specifically:
+//   - text blocks always include the "text" field
+//   - tool_use blocks always include "input" (defaults to {})
+//   - tool_result blocks always include "content"
+//
+// This prevents "sequence item 0: expected str instance, NoneType found"
+// errors caused by omitting empty string fields that the API requires.
+func (b ContentBlock) MarshalJSON() ([]byte, error) {
+	// Use an ordered map approach to build JSON with required fields.
+	type RawBlock struct {
+		Type      ContentBlockType  `json:"type"`
+		Text      *string           `json:"text,omitempty"`
+		ID        string            `json:"id,omitempty"`
+		Name      string            `json:"name,omitempty"`
+		Input     json.RawMessage   `json:"input,omitempty"`
+		ToolUseID string            `json:"tool_use_id,omitempty"`
+		Content   *string           `json:"content,omitempty"`
+		IsError   bool              `json:"is_error,omitempty"`
+	}
+
+	raw := RawBlock{
+		Type:      b.Type,
+		ID:        b.ID,
+		Name:      b.Name,
+		Input:     b.Input,
+		ToolUseID: b.ToolUseID,
+		IsError:   b.IsError,
+	}
+
+	switch b.Type {
+	case ContentText:
+		// Always include text field, even when empty
+		raw.Text = &b.Text
+	case ContentToolUse:
+		// Always include input, defaulting to {} if nil
+		if raw.Input == nil {
+			raw.Input = json.RawMessage(`{}`)
+		}
+	case ContentToolResult:
+		// Always include content field, even when empty
+		raw.Content = &b.Content
+	}
+
+	return json.Marshal(raw)
+}
+
 // NewTextBlock creates a text content block.
 func NewTextBlock(text string) ContentBlock {
 	return ContentBlock{Type: ContentText, Text: text}

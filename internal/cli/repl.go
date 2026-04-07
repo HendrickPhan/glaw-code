@@ -31,23 +31,58 @@ type REPL struct {
 	shutdownCh chan struct{}
 	// shutdownOnce ensures we only close shutdownCh once
 	shutdownOnce sync.Once
+
+	// Command history
+	history *InputHistory
+
+	// Background action state
+	bgAction     *backgroundAction
+	bgMu         sync.Mutex
+	thinkingDetail bool
+
+	// activeSpinner holds the currently active CLI spinner (e.g. "Thinking...")
+	// so it can be paused when a permission prompt needs to interact with the user.
+	activeSpinner *Spinner
+}
+
+// backgroundAction holds state for an action moved to background via /btw.
+type backgroundAction struct {
+	actionCtx    context.Context
+	actionCancel context.CancelFunc
+	resultCh     chan runResult
+	prompt       string
+	spinner      *Spinner
+}
+
+// runResult holds the result of a background action.
+type runResult struct {
+	err error
 }
 
 // NewREPL creates a new REPL with permission checking wired in.
 func NewREPL(rt *runtime.ConversationRuntime) *REPL {
 	reader := bufio.NewReader(os.Stdin)
 
-	// Wire the permission checker: prompt user for dangerous operations
-	rt.PermissionChecker = func(toolName string, input json.RawMessage) bool {
-		return checkToolPermission(rt, reader, toolName, input)
-	}
-
-	return &REPL{
+	repl := &REPL{
 		Runtime:    rt,
 		CmdDisp:    commands.NewDispatcher(rt),
 		reader:     reader,
 		shutdownCh: make(chan struct{}),
+		history:    NewInputHistory(),
 	}
+
+	// Wire the permission checker: prompt user for dangerous operations.
+	// The spinner is paused while prompting so it doesn't overwrite the prompt.
+	rt.PermissionChecker = func(toolName string, input json.RawMessage) bool {
+		// Pause the active spinner if one is running
+		if repl.activeSpinner != nil {
+			repl.activeSpinner.Stop()
+		}
+		result := checkToolPermission(rt, reader, toolName, input)
+		return result
+	}
+
+	return repl
 }
 
 // Shutdown signals the REPL to exit gracefully.
@@ -166,6 +201,14 @@ func checkToolPermission(rt *runtime.ConversationRuntime, reader *bufio.Reader, 
 func (r *REPL) gracefulShutdown() {
 	fmt.Println()
 
+	// Cancel any background action
+	r.bgMu.Lock()
+	if r.bgAction != nil {
+		r.bgAction.actionCancel()
+		r.bgAction = nil
+	}
+	r.bgMu.Unlock()
+
 	// Save session
 	if r.Runtime.Session != nil && r.Runtime.Session.ID != "" {
 		workspaceRoot := r.Runtime.GetWorkspaceRoot()
@@ -185,24 +228,16 @@ func (r *REPL) gracefulShutdown() {
 }
 
 // Run starts the REPL loop with graceful Ctrl+C handling.
-//
-// Ctrl+C behavior:
-//   - While an action is running: cancels the action and returns to the prompt
-//   - While idle (1st press): prints "Press Ctrl+C again to confirm exit"
-//   - While idle (2nd press within 2s): triggers graceful shutdown
 func (r *REPL) Run(ctx context.Context) error {
 	// Set up signal channel
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigChan)
 
-	// We don't use signal.NotifyContext anymore because we handle signals ourselves
-	// to implement the 3-level Ctrl+C behavior.
-	// Create a cancellable context for the parent context (e.g. SIGTERM)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Watch for the parent context being done (e.g. from main)
+	// Watch for the parent context being done
 	go func() {
 		<-ctx.Done()
 		r.Shutdown()
@@ -230,27 +265,43 @@ func (r *REPL) Run(ctx context.Context) error {
 		}
 
 		shortDir := filepath.Base(displayDir)
-		promptStr := fmt.Sprintf("%s%s>%s ", Green+Bold, shortDir, Reset)
 
-		// Read input — this runs in raw terminal mode and handles its own Ctrl+C
-		// by returning ErrInterrupted.
-		input, err := ReadLineWithCompletion(promptStr)
+		// Check if there's a background action running
+		r.bgMu.Lock()
+		hasBg := r.bgAction != nil
+		r.bgMu.Unlock()
+
+		var promptStr string
+		if hasBg {
+			promptStr = fmt.Sprintf("%s%s⚡>%s ", Yellow+Bold, shortDir, Reset)
+		} else {
+			promptStr = fmt.Sprintf("%s%s>%s ", Green+Bold, shortDir, Reset)
+		}
+
+		input, err := ReadLineWithCompletionAndHistory(promptStr, r.history)
 		if err != nil {
 			if err == ErrInterrupted {
-				// User pressed Ctrl+C at the input prompt (idle state)
 				count := r.recordInterrupt()
 				if count >= 2 {
-					// Second Ctrl+C: confirm exit
 					r.gracefulShutdown()
 					return nil
 				}
-				// First Ctrl+C: warn user
 				fmt.Printf("%s  Press Ctrl+C again within 2s to exit.%s\n", Yellow, Reset)
 				continue
 			}
-			// Other error (e.g. EOF from Ctrl+D)
 			r.gracefulShutdown()
 			return nil
+		}
+
+		// Handle Ctrl+O (thinking detail toggle)
+		if input == "\x0f" {
+			r.thinkingDetail = !r.thinkingDetail
+			if r.thinkingDetail {
+				fmt.Printf("%s  Thinking detail: ON (future thinking output will be expanded)%s\n", Cyan, Reset)
+			} else {
+				fmt.Printf("%s  Thinking detail: OFF%s\n", Dim, Reset)
+			}
+			continue
 		}
 
 		// Reset interrupt counter on successful input
@@ -264,6 +315,62 @@ func (r *REPL) Run(ctx context.Context) error {
 		if input == "/quit" || input == "/exit" || input == ":q" {
 			r.gracefulShutdown()
 			return nil
+		}
+
+		// Handle /fg command to bring background action back
+		if input == "/fg" {
+			r.bgMu.Lock()
+			bg := r.bgAction
+			r.bgMu.Unlock()
+			if bg == nil {
+				fmt.Printf("%s  No background action running.%s\n", Yellow, Reset)
+				continue
+			}
+			// Wait for the background action to complete
+			r.handleBackgroundResult(bg, sigChan)
+			continue
+		}
+
+		// Handle /btw command to move action to background and ask new question
+		if strings.HasPrefix(input, "/btw") {
+			remainder := strings.TrimSpace(strings.TrimPrefix(input, "/btw"))
+			if remainder == "" {
+				fmt.Printf("%s  Usage: /btw <question>%s\n", Dim, Reset)
+				continue
+			}
+
+			// If there's a running action, move it to background
+			r.bgMu.Lock()
+			if r.bgAction == nil {
+				r.bgMu.Unlock()
+				// No running action, just treat as a regular question
+				if err := r.handlePromptWithCancel(ctx, sigChan, remainder); err != nil {
+					select {
+					case <-r.shutdownCh:
+						r.gracefulShutdown()
+						return nil
+					default:
+					}
+					fmt.Printf("Error: %v\n", err)
+				}
+				continue
+			}
+			r.bgMu.Unlock()
+
+			fmt.Printf("%s  ⚡ Current task moved to background. Type %s/fg%s to check on it.%s\n", Yellow, Bold, Yellow, Reset)
+			fmt.Printf("%s  Asking your side question...%s\n", Cyan, Reset)
+
+			// Handle the side question
+			if err := r.handlePromptWithCancel(ctx, sigChan, remainder); err != nil {
+				select {
+				case <-r.shutdownCh:
+					r.gracefulShutdown()
+					return nil
+				default:
+				}
+				fmt.Printf("Error: %v\n", err)
+			}
+			continue
 		}
 
 		if strings.HasPrefix(input, "/") {
@@ -282,10 +389,8 @@ func (r *REPL) Run(ctx context.Context) error {
 			continue
 		}
 
-		// Handle a prompt — this is the "action" state where Ctrl+C should cancel
-		// the running action rather than exit.
+		// Handle a prompt
 		if err := r.handlePromptWithCancel(ctx, sigChan, input); err != nil {
-			// Check if it's a shutdown signal
 			select {
 			case <-r.shutdownCh:
 				r.gracefulShutdown()
@@ -297,9 +402,64 @@ func (r *REPL) Run(ctx context.Context) error {
 	}
 }
 
+// handleBackgroundResult waits for a background action to complete and displays its result.
+func (r *REPL) handleBackgroundResult(bg *backgroundAction, sigChan <-chan os.Signal) {
+	fmt.Printf("%s  ⚡ Waiting for background task...%s\n", Yellow, Reset)
+
+	// Show spinner while waiting
+	spin := NewSpinner("Background task running...")
+
+	select {
+	case result := <-bg.resultCh:
+		spin.Stop()
+		r.bgMu.Lock()
+		r.bgAction = nil
+		r.bgMu.Unlock()
+
+		if result.err != nil {
+			if runtime.IsActionCancelled(result.err) {
+				fmt.Printf("%s  Background action cancelled.%s\n", Green, Reset)
+			} else {
+				fmt.Printf("%s  Background error: %v%s\n", Red, result.err, Reset)
+			}
+		} else {
+			fmt.Printf("%s  ✓ Background task completed.%s\n", Green, Reset)
+			displayUsage(r.Runtime)
+		}
+
+		if r.Runtime.Snapshotter != nil {
+			r.Runtime.Snapshotter.FinishBatch()
+		}
+
+		if path, err := runtime.SaveSession(r.Runtime.Session, ".glaw/sessions"); err == nil {
+			_ = path
+		}
+
+	case sig := <-sigChan:
+		spin.Stop()
+		_ = sig
+		fmt.Printf("\n%s  Cancelling background task...%s\n", Yellow, Reset)
+		bg.actionCancel()
+
+		// Wait for it to finish
+		select {
+		case <-bg.resultCh:
+		case <-time.After(3 * time.Second):
+		}
+
+		r.bgMu.Lock()
+		r.bgAction = nil
+		r.bgMu.Unlock()
+
+		fmt.Printf("%s  Background task cancelled.%s\n", Green, Reset)
+
+	case <-r.shutdownCh:
+		spin.Stop()
+		bg.actionCancel()
+	}
+}
+
 // handlePromptWithCancel runs the prompt with Ctrl+C cancellation support.
-// On first Ctrl+C, it cancels the running action and returns to the REPL.
-// On second Ctrl+C during cancellation, it triggers shutdown.
 func (r *REPL) handlePromptWithCancel(ctx context.Context, sigChan <-chan os.Signal, prompt string) error {
 	// Create a cancellable context for this action
 	actionCtx, actionCancel := context.WithCancel(ctx)
@@ -315,15 +475,20 @@ func (r *REPL) handlePromptWithCancel(ctx context.Context, sigChan <-chan os.Sig
 		r.Runtime.Snapshotter.BeginBatch()
 	}
 
-	// Run the action in a goroutine so we can handle signals
-	type runResult struct {
-		err error
-	}
+	// Run the action in a goroutine so we can handle signals and user input
 	resultCh := make(chan runResult, 1)
 
 	go func() {
 		err := r.Runtime.RunLoop(actionCtx)
 		resultCh <- runResult{err: err}
+	}()
+
+	// Show thinking spinner
+	spin := NewSpinner("Thinking...")
+	r.activeSpinner = spin
+	defer func() {
+		spin.Stop()
+		r.activeSpinner = nil
 	}()
 
 	// Wait for either the action to complete or a signal
@@ -334,17 +499,16 @@ func (r *REPL) handlePromptWithCancel(ctx context.Context, sigChan <-chan os.Sig
 		select {
 		case result := <-resultCh:
 			runErr = result.err
+			spin.Stop()
 			goto done
 
 		case sig := <-sigChan:
 			_ = sig
 			if !secondSig {
-				// First Ctrl+C: cancel the running action
 				fmt.Printf("\n%s  Cancelling action...%s\n", Yellow, Reset)
 				actionCancel()
 				secondSig = true
 			} else {
-				// Second Ctrl+C: force shutdown
 				fmt.Printf("\n%s  Force exit requested.%s\n", Red, Reset)
 				r.Shutdown()
 				return nil
@@ -361,7 +525,6 @@ done:
 		r.Runtime.Snapshotter.FinishBatch()
 	}
 
-	// Handle the result
 	if runErr != nil {
 		if runtime.IsActionCancelled(runErr) {
 			fmt.Printf("%s  Action cancelled. Returning to prompt.%s\n", Green, Reset)

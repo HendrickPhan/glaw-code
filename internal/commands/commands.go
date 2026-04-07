@@ -113,6 +113,7 @@ var Specs = []Spec{
 	{Name: "lsp", Summary: "LSP server management and status", ArgumentHint: "[status|restart|detect]", Category: CategoryWorkspace},
 	{Name: "yolo", Summary: "Toggle yolo mode (auto-approve all tool calls)", Category: CategoryCore},
 {Name: "revert", Aliases: []string{"undo"}, Summary: "Revert file changes from the last turn", ArgumentHint: "[all]", Category: CategoryWorkspace},
+	{Name: "analyze", Summary: "Analyze project source code and generate summary/graph", ArgumentHint: "[full|summary|graph] [mermaid|dot|json]", Category: CategoryWorkspace},
 }
 
 // ParsedCommand is a parsed slash command.
@@ -283,6 +284,8 @@ func (d *Dispatcher) dispatch(ctx context.Context, cmd *ParsedCommand) (*Result,
 		return d.handleYolo()
 	case "revert":
 		return d.handleRevert(cmd.Remainder)
+	case "analyze":
+		return d.handleAnalyze(cmd.Remainder)
 	case "quit", "exit":
 		return &Result{Action: "quit", Message: "Goodbye!"}, nil
 	default:
@@ -831,21 +834,108 @@ func (d *Dispatcher) handleAgents() (*Result, error) {
 // --- Skills ---
 
 func (d *Dispatcher) handleSkills() (*Result, error) {
-	skills := []struct {
-		name, description string
-	}{
-		{"commit", "Create a git commit with staged changes"},
-		{"review-pr", "Review a pull request"},
-		{"pdf", "Read and analyze PDF files"},
-		{"context7-mcp", "Fetch current library/framework documentation"},
-		{"claude-api", "Build apps with the Claude API or Anthropic SDK"},
-		{"simplify", "Review and simplify changed code"},
+	type skillInfo struct {
+		name        string
+		description string
+		source      string // "global" or "project"
 	}
+
+	var skills []skillInfo
+
+	// Load skills from project skills directory (.glaw/skills)
+	projectDir := filepath.Join(".glaw", "skills")
+	if entries, err := os.ReadDir(projectDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+				continue
+			}
+			name := strings.TrimSuffix(e.Name(), ".md")
+			description := ""
+			// Read first line as description
+			if data, err := os.ReadFile(filepath.Join(projectDir, e.Name())); err == nil {
+				lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+				if len(lines) > 0 {
+					// Strip leading # if present
+					desc := strings.TrimSpace(lines[0])
+					desc = strings.TrimPrefix(desc, "#")
+					desc = strings.TrimSpace(desc)
+					if desc != "" {
+						description = desc
+					} else if len(lines) > 1 {
+						// Try second line
+						desc = strings.TrimSpace(lines[1])
+						desc = strings.TrimPrefix(desc, "#")
+						description = strings.TrimSpace(desc)
+					}
+				}
+			}
+			if description == "" {
+				description = "(no description)"
+			}
+			skills = append(skills, skillInfo{name: name, description: description, source: "project"})
+		}
+	}
+
+	// Load skills from global skills directory (~/.glaw/skills)
+	home, err := os.UserHomeDir()
+	if err == nil {
+		globalDir := filepath.Join(home, ".glaw", "skills")
+		if entries, err := os.ReadDir(globalDir); err == nil {
+			for _, e := range entries {
+				if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+					continue
+				}
+				name := strings.TrimSuffix(e.Name(), ".md")
+				// Skip if already loaded from project
+				found := false
+				for _, s := range skills {
+					if s.name == name {
+						found = true
+						break
+					}
+				}
+				if found {
+					continue
+				}
+
+				description := ""
+				if data, err := os.ReadFile(filepath.Join(globalDir, e.Name())); err == nil {
+					lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+					if len(lines) > 0 {
+						desc := strings.TrimSpace(lines[0])
+						desc = strings.TrimPrefix(desc, "#")
+						desc = strings.TrimSpace(desc)
+						if desc != "" {
+							description = desc
+						} else if len(lines) > 1 {
+							desc = strings.TrimSpace(lines[1])
+							desc = strings.TrimPrefix(desc, "#")
+							description = strings.TrimSpace(desc)
+						}
+					}
+				}
+				if description == "" {
+					description = "(no description)"
+				}
+				skills = append(skills, skillInfo{name: name, description: description, source: "global"})
+			}
+		}
+	}
+
+	if len(skills) == 0 {
+		return &Result{Action: "continue", Message: "No skills found.\n\nSkills are loaded from:\n  ~/.glaw/skills/*.md (global)\n  .glaw/skills/*.md (project)\n\nCreate a skill by adding a markdown file in either directory.\nThe first line (or # heading) is used as the description."}, nil
+	}
+
 	var sb strings.Builder
 	sb.WriteString("Available Skills:\n\n")
 	for _, s := range skills {
-		sb.WriteString(fmt.Sprintf("  %-20s %s\n", s.name, s.description))
+		sourceTag := ""
+		if s.source == "global" {
+			sourceTag = " (global)"
+		}
+		sb.WriteString(fmt.Sprintf("  %-20s %s%s\n", s.name, s.description, sourceTag))
 	}
+	sb.WriteString(fmt.Sprintf("\n  %d skill(s) loaded from .glaw/skills/ and ~/.glaw/skills/", len(skills)))
 	return &Result{Action: "continue", Message: sb.String()}, nil
 }
 
@@ -1205,6 +1295,39 @@ func (d *Dispatcher) handleLSPStatus() (*Result, error) {
 
 func (d *Dispatcher) handleLSPDetect() (*Result, error) {
 	return &Result{Action: "continue", Message: "LSP auto-detection scans for known language servers on your PATH.\n\nDetected servers are configured for lazy initialization - they connect on first use.\nTo see current status, use: /lsp status\nTo manually configure, create .glaw/lsp.json with:\n  {\"servers\": [{\"name\": \"gopls\", \"command\": \"gopls\", \"args\": [\"serve\"], \"extensionToLanguage\": {\".go\": \"go\"}}]}"}, nil
+}
+
+// --- /analyze: Analyze project source code ---
+
+func (d *Dispatcher) handleAnalyze(remainder string) (*Result, error) {
+	parts := strings.Fields(remainder)
+	mode := "full"
+	format := "text"
+
+	for _, part := range parts {
+		switch part {
+		case "full", "summary", "graph":
+			mode = part
+		case "mermaid", "mmd":
+			format = "mermaid"
+		case "dot", "graphviz":
+			format = "dot"
+		case "json":
+			format = "json"
+		case "text":
+			format = "text"
+		}
+	}
+
+	workspaceRoot := d.runtime.GetWorkspaceRoot()
+	if workspaceRoot == "" {
+		return &Result{Action: "continue", Message: "No workspace root set. Please run from a project directory."}, nil
+	}
+
+	return &Result{
+		Action:  "continue",
+		Message: "Use the analyze tool (mode: " + mode + ", format: " + format + ") for project analysis.\nYou can also ask the AI: \"analyze this project\" and it will use the analyze tool.",
+	}, nil
 }
 
 // --- /revert: Undo file changes ---

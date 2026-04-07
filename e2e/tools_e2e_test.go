@@ -45,8 +45,8 @@ func execTool(t *testing.T, reg *tools.Registry, name string, input interface{})
 func TestE2EToolRegistrySpecs(t *testing.T) {
 	reg, _ := newTestRegistry(t)
 	specs := reg.GetToolSpecs()
-	if len(specs) != 22 {
-		t.Fatalf("GetToolSpecs returned %d specs, want 22", len(specs))
+	if len(specs) != 23 {
+		t.Fatalf("GetToolSpecs returned %d specs, want 23", len(specs))
 	}
 
 	wantNames := map[string]bool{
@@ -54,7 +54,7 @@ func TestE2EToolRegistrySpecs(t *testing.T) {
 		"glob_search": false, "grep_search": false, "web_fetch": false,
 		"web_search": false, "todo_write": false, "tool_search": false,
 		"notebook_edit": false, "sleep": false, "send_user_message": false,
-		"config": false,
+		"config": false, "analyze": false,
 		"lsp_go_to_definition": false, "lsp_find_references": false, "lsp_hover": false,
 		"lsp_document_symbol": false, "lsp_workspace_symbol": false, "lsp_go_to_implementation": false,
 		"lsp_incoming_calls": false, "lsp_outgoing_calls": false,

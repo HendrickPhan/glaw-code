@@ -1,6 +1,8 @@
 package api
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -70,6 +72,156 @@ func TestNewToolResultBlock(t *testing.T) {
 	bErr := NewToolResultBlock("call_456", "command failed", true)
 	if !bErr.IsError {
 		t.Error("IsError should be true")
+	}
+}
+
+func TestContentBlockMarshalJSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		block   ContentBlock
+		wantHas map[string]bool // keys that MUST appear in JSON output
+		wantNot map[string]bool // keys that must NOT appear in JSON output
+	}{
+		{
+			name:    "text block always includes text field",
+			block:   NewTextBlock(""),
+			wantHas: map[string]bool{`"text":""`: true, `"type":"text"`: true},
+		},
+		{
+			name:    "text block with content includes text field",
+			block:   NewTextBlock("hello"),
+			wantHas: map[string]bool{`"text":"hello"`: true, `"type":"text"`: true},
+		},
+		{
+			name:    "tool_use block always includes input field",
+			block:   ContentBlock{Type: ContentToolUse, ID: "id1", Name: "bash", Input: nil},
+			wantHas: map[string]bool{`"input":{}`: true, `"type":"tool_use"`: true},
+		},
+		{
+			name:    "tool_use block preserves existing input",
+			block:   NewToolUseBlock("id1", "bash", json.RawMessage(`{"command":"ls"}`)),
+			wantHas: map[string]bool{`"command":"ls"`: true, `"type":"tool_use"`: true},
+		},
+		{
+			name:    "tool_result block always includes content field even when empty",
+			block:   NewToolResultBlock("toolu_123", "", false),
+			wantHas: map[string]bool{`"content":""`: true, `"type":"tool_result"`: true},
+		},
+		{
+			name:    "tool_result block with content",
+			block:   NewToolResultBlock("toolu_123", "output here", false),
+			wantHas: map[string]bool{`"content":"output here"`: true, `"type":"tool_result"`: true},
+		},
+		{
+			name:    "tool_result error block always includes content field",
+			block:   NewToolResultBlock("toolu_456", "", true),
+			wantHas: map[string]bool{`"content":""`: true, `"is_error":true`: true, `"type":"tool_result"`: true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b, err := json.Marshal(tt.block)
+			if err != nil {
+				t.Fatalf("Marshal error: %v", err)
+			}
+			s := string(b)
+			t.Logf("JSON: %s", s)
+
+			for want, _ := range tt.wantHas {
+				if !strings.Contains(s, want) {
+					t.Errorf("JSON output %q does not contain required %q", s, want)
+				}
+			}
+			for notWant, _ := range tt.wantNot {
+				if strings.Contains(s, notWant) {
+					t.Errorf("JSON output %q should not contain %q", s, notWant)
+				}
+			}
+		})
+	}
+}
+
+func TestToolResultEmptyContentNotOmitted(t *testing.T) {
+	// This is the exact scenario that caused the bug:
+	// A tool_result with empty content must still include "content":"" in JSON.
+	// Previously, omitempty caused the content field to be omitted entirely,
+	// which the Anthropic API treated as None/null, causing:
+	// "sequence item 0: expected str instance, NoneType found"
+	block := NewToolResultBlock("toolu_abc123", "", false)
+	b, err := json.Marshal(block)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+	s := string(b)
+	t.Logf("JSON: %s", s)
+
+	if !strings.Contains(s, `"content":""`) {
+		t.Errorf("tool_result with empty content MUST include \"content\":\"\" in JSON, got: %s", s)
+	}
+	if !strings.Contains(s, `"tool_use_id":"toolu_abc123"`) {
+		t.Errorf("tool_result missing tool_use_id, got: %s", s)
+	}
+}
+
+func TestToolUseNilInputNotOmitted(t *testing.T) {
+	// Similarly, tool_use with nil input must include "input":{} in JSON.
+	block := ContentBlock{Type: ContentToolUse, ID: "toolu_xyz", Name: "read_file", Input: nil}
+	b, err := json.Marshal(block)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+	s := string(b)
+	t.Logf("JSON: %s", s)
+
+	if !strings.Contains(s, `"input":{}`) {
+		t.Errorf("tool_use with nil input MUST include \"input\":{} in JSON, got: %s", s)
+	}
+}
+
+func TestTextBlockEmptyNotOmitted(t *testing.T) {
+	// Text blocks with empty text should still include "text":"" in JSON.
+	block := NewTextBlock("")
+	b, err := json.Marshal(block)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+	s := string(b)
+	t.Logf("JSON: %s", s)
+
+	if !strings.Contains(s, `"text":""`) {
+		t.Errorf("text block with empty text MUST include \"text\":\"\" in JSON, got: %s", s)
+	}
+}
+
+func TestMessageWithEmptyToolResult(t *testing.T) {
+	// Simulate the exact API request that would fail:
+	// A conversation with a tool result that has empty content.
+	msgs := []Message{
+		{Role: RoleUser, Content: []ContentBlock{NewTextBlock("run ls")}},
+		{Role: RoleAssistant, Content: []ContentBlock{
+			{Type: ContentToolUse, ID: "toolu_123", Name: "bash", Input: json.RawMessage(`{"command":"ls"}`)},
+		}},
+		{Role: RoleUser, Content: []ContentBlock{
+			NewToolResultBlock("toolu_123", "", false), // empty content
+		}},
+	}
+
+	b, err := json.Marshal(msgs)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+	s := string(b)
+	t.Logf("Messages JSON: %s", s)
+
+	// Verify the tool_result message includes the content field
+	if !strings.Contains(s, `"content":""`) {
+		t.Errorf("tool_result in message must include \"content\":\"\" field, got: %s", s)
+	}
+
+	// Verify the tool_use message includes input
+	if !strings.Contains(s, `"input":{"command":"ls"}`) {
+		t.Errorf("tool_use in message must include input field, got: %s", s)
 	}
 }
 

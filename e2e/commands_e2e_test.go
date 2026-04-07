@@ -462,14 +462,44 @@ func TestE2ECmdDiffNoChanges(t *testing.T) {
 // --- Skills and Agents ---
 
 func TestE2ECmdSkillsList(t *testing.T) {
-	d := commands.NewDispatcher(newMockRuntimeFS(t.TempDir()))
+	// Create a temp dir with skill files to simulate real skill loading
+	tmpDir := t.TempDir()
+	skillsDir := filepath.Join(tmpDir, ".glaw", "skills")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create sample skill files
+	skillFiles := map[string]string{
+		"commit.md":    "# Create a git commit\nCreate a git commit with staged changes",
+		"review-pr.md": "# Review a PR\nReview a pull request",
+		"pdf.md":       "# Read PDF files\nRead and analyze PDF files",
+	}
+	for name, content := range skillFiles {
+		if err := os.WriteFile(filepath.Join(skillsDir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Change to the temp dir so .glaw/skills is found
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(origDir)
+
+	d := commands.NewDispatcher(newMockRuntimeFS(tmpDir))
 	result := handleCmd(t, d, "/skills")
 
-	wantSkills := []string{"commit", "review-pr", "pdf", "context7-mcp", "claude-api", "simplify"}
-	for _, skill := range wantSkills {
-		if !strings.Contains(result.Message, skill) {
-			t.Errorf("skills missing %q: %s", skill, result.Message)
-		}
+	// Verify that skills loaded from the temp directory appear
+	if !strings.Contains(result.Message, "commit") {
+		t.Errorf("skills missing 'commit': %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "review-pr") {
+		t.Errorf("skills missing 'review-pr': %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "pdf") {
+		t.Errorf("skills missing 'pdf': %s", result.Message)
 	}
 }
 

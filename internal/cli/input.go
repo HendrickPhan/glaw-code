@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/hieu-glaw/glaw-code/internal/commands"
 	"golang.org/x/term"
@@ -13,9 +14,75 @@ import (
 // ErrInterrupted is returned when the user presses Ctrl+C at the input prompt.
 var ErrInterrupted = errors.New("interrupted")
 
-// ReadLineWithCompletion reads a line from stdin with slash-command autocomplete.
-// When the user types '/', matching commands are shown. Tab completes the prefix.
+// InputHistory manages command history with navigation.
+type InputHistory struct {
+	entries []string
+	pos     int // current position (0 = newest, len-1 = oldest)
+}
+
+// NewInputHistory creates a new input history.
+func NewInputHistory() *InputHistory {
+	return &InputHistory{
+		pos: -1, // -1 means not navigating
+	}
+}
+
+// Add adds an entry to the history and resets the navigation position.
+func (h *InputHistory) Add(entry string) {
+	if entry == "" {
+		return
+	}
+	// Don't add duplicates of the most recent entry
+	if len(h.entries) > 0 && h.entries[0] == entry {
+		h.pos = -1
+		return
+	}
+	// Prepend to front
+	h.entries = append([]string{entry}, h.entries...)
+	// Limit history size
+	if len(h.entries) > 1000 {
+		h.entries = h.entries[:1000]
+	}
+	h.pos = -1
+}
+
+// Older moves to an older entry and returns it. Returns ("", false) if at the end.
+func (h *InputHistory) Older() (string, bool) {
+	if len(h.entries) == 0 {
+		return "", false
+	}
+	if h.pos < len(h.entries)-1 {
+		h.pos++
+	}
+	if h.pos >= 0 && h.pos < len(h.entries) {
+		return h.entries[h.pos], true
+	}
+	return "", false
+}
+
+// Newer moves to a newer entry and returns it. Returns ("", false) if at the newest.
+func (h *InputHistory) Newer() (string, bool) {
+	if h.pos > 0 {
+		h.pos--
+		return h.entries[h.pos], true
+	}
+	h.pos = -1
+	return "", false
+}
+
+// Reset resets the navigation position.
+func (h *InputHistory) Reset() {
+	h.pos = -1
+}
+
+// ReadLineWithCompletion reads a line from stdin with slash-command autocomplete,
+// command history (up/down arrows), and paste detection (bracket paste mode).
 func ReadLineWithCompletion(prompt string) (string, error) {
+	return ReadLineWithCompletionAndHistory(prompt, nil)
+}
+
+// ReadLineWithCompletionAndHistory reads a line with completion and history support.
+func ReadLineWithCompletionAndHistory(prompt string, history *InputHistory) (string, error) {
 	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
 		// Fallback to simple line reading if raw mode fails
@@ -26,10 +93,25 @@ func ReadLineWithCompletion(prompt string) (string, error) {
 	}
 	defer func() { _ = term.Restore(int(os.Stdin.Fd()), oldState) }()
 
+	// Enable bracket paste mode so we can detect paste events
+	fmt.Print("\x1b[?2004h")
+	defer fmt.Print("\x1b[?2004l")
+
 	buf := make([]byte, 1)
 	var line strings.Builder
 	selectedIdx := 0
 	completionLineCount := 0
+
+	// Track paste state
+	pasting := false
+	var pasteBuf strings.Builder
+
+	// Track saved line before history navigation
+	savedLine := ""
+	navigatingHistory := false
+
+	// Track previous display line count for proper multi-line redraw
+	prevLineCount := 1
 
 	// Print prompt
 	fmt.Print(prompt)
@@ -51,21 +133,124 @@ func ReadLineWithCompletion(prompt string) (string, error) {
 			fmt.Print("\r\n")
 			return "", ErrInterrupted
 
-		case b == 13 || b == 10: // Enter
+		case b == 13 || b == 10: // Enter (CR or LF)
+			// If we're in a paste, ignore Enter - it's part of the pasted content
+			if pasting {
+				pasteBuf.WriteByte('\n')
+				continue
+			}
 			clearAndEraseCompletion(&completionLineCount)
 			fmt.Print("\r\n")
-			return line.String(), nil
+			result := line.String()
+			if history != nil {
+				history.Add(result)
+			}
+			return result, nil
+
+		case b == 15: // Ctrl+O - signal to caller (thinking detail toggle)
+			clearAndEraseCompletion(&completionLineCount)
+			return "\x0f", nil
+
+		case b == 27: // ESC - start of escape sequence
+			seq := make([]byte, 0, 4)
+			seq = append(seq, b)
+
+			// Try to read the '[' character
+			if n, err := os.Stdin.Read(buf); err != nil || n == 0 {
+				continue
+			}
+			if buf[0] != '[' && buf[0] != 'O' {
+				continue
+			}
+			seq = append(seq, buf[0])
+
+			// Read the command byte
+			if n, err := os.Stdin.Read(buf); err != nil || n == 0 {
+				continue
+			}
+			seq = append(seq, buf[0])
+
+			// Check for bracket paste: ESC[200~ (paste start) and ESC[201~ (paste end)
+			if seq[1] == '[' && buf[0] == '2' {
+				// Read 3 more bytes: digit, digit, '~'
+				pasteSeq := make([]byte, 3)
+				if n, err := os.Stdin.Read(pasteSeq); err != nil || n < 3 {
+					continue
+				}
+				if pasteSeq[0] == '0' && pasteSeq[1] == '0' && pasteSeq[2] == '~' {
+					// ESC[200~ - paste start
+					pasting = true
+					pasteBuf.Reset()
+					continue
+				}
+				if pasteSeq[0] == '0' && pasteSeq[1] == '1' && pasteSeq[2] == '~' {
+					// ESC[201~ - paste end
+					pasting = false
+					pasted := cleanPastedContent(pasteBuf.String())
+					if pasted != "" {
+						clearAndEraseCompletion(&completionLineCount)
+						line.WriteString(pasted)
+						prevLineCount = redrawLine(prompt, line.String(), prevLineCount)
+						completionLineCount = tryShowCompletion(line.String(), &selectedIdx)
+					}
+					continue
+				}
+				continue
+			}
+
+			// Arrow keys and other escape sequences
+			switch buf[0] {
+			case 'A': // Up arrow - history navigation
+				if history != nil {
+					clearAndEraseCompletion(&completionLineCount)
+					if !navigatingHistory {
+						savedLine = line.String()
+						navigatingHistory = true
+					}
+					if entry, ok := history.Older(); ok {
+						line.Reset()
+						line.WriteString(entry)
+						prevLineCount = redrawLine(prompt, line.String(), prevLineCount)
+					}
+				}
+			case 'B': // Down arrow - history navigation
+				if history != nil {
+					clearAndEraseCompletion(&completionLineCount)
+					if navigatingHistory {
+						if entry, ok := history.Newer(); ok {
+							line.Reset()
+							line.WriteString(entry)
+							prevLineCount = redrawLine(prompt, line.String(), prevLineCount)
+						} else {
+							line.Reset()
+							line.WriteString(savedLine)
+							navigatingHistory = false
+							prevLineCount = redrawLine(prompt, line.String(), prevLineCount)
+						}
+					}
+				}
+			case 'C': // Right arrow - ignore
+			case 'D': // Left arrow - ignore
+			default:
+				// Handle extended sequences like ESC[1;5D (Ctrl+Left), etc.
+				if buf[0] == '1' {
+					extBuf := make([]byte, 2)
+					if n, err := os.Stdin.Read(extBuf); err == nil && n == 2 {
+						// e.g., ESC[1;5C = Ctrl+Right, ESC[1;5D = Ctrl+Left
+					}
+				}
+			}
+			continue
 
 		case b == 127 || b == 8: // Backspace
 			if line.Len() > 0 {
-				// Remove last rune
 				str := line.String()
 				runes := []rune(str)
 				runes = runes[:len(runes)-1]
 				line.Reset()
 				line.WriteString(string(runes))
 				clearAndEraseCompletion(&completionLineCount)
-				redrawLine(prompt, line.String())
+				prevLineCount = redrawLine(prompt, line.String(), prevLineCount)
 				completionLineCount = tryShowCompletion(line.String(), &selectedIdx)
 			}
 
@@ -82,7 +267,7 @@ func ReadLineWithCompletion(prompt string) (string, error) {
 						line.Reset()
 						line.WriteString("/" + matches[0].Name)
 					}
-					redrawLine(prompt, line.String())
+					prevLineCount = redrawLine(prompt, line.String(), prevLineCount)
 					if len(matches) > 1 {
 						completionLineCount = showCompletion(matches, selectedIdx)
 					}
@@ -90,17 +275,278 @@ func ReadLineWithCompletion(prompt string) (string, error) {
 			}
 
 		default:
+			// Handle pasting (when terminal doesn't support bracket paste mode)
+			if pasting {
+				if b >= 32 && b < 127 {
+					pasteBuf.WriteByte(b)
+				}
+				continue
+			}
 			// Printable character
 			if b >= 32 && b < 127 {
+				if navigatingHistory {
+					navigatingHistory = false
+				}
 				clearAndEraseCompletion(&completionLineCount)
-
 				line.WriteByte(b)
-				redrawLine(prompt, line.String())
-
+				prevLineCount = redrawLine(prompt, line.String(), prevLineCount)
 				completionLineCount = tryShowCompletion(line.String(), &selectedIdx)
 			}
 		}
 	}
+}
+
+// ReadLineDuringAction reads a line from stdin while an action is running.
+func ReadLineDuringAction(prompt string, history *InputHistory) (string, error) {
+	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = term.Restore(int(os.Stdin.Fd()), oldState) }()
+
+	// Enable bracket paste mode
+	fmt.Print("\x1b[?2004h")
+	defer fmt.Print("\x1b[?2004l")
+
+	buf := make([]byte, 1)
+	var line strings.Builder
+	selectedIdx := 0
+	completionLineCount := 0
+	pasting := false
+	var pasteBuf strings.Builder
+	prevLineCount := 1
+
+	fmt.Print(prompt)
+
+	for {
+		n, err := os.Stdin.Read(buf)
+		if err != nil || n == 0 {
+			if line.Len() > 0 {
+				return line.String(), nil
+			}
+			return "", err
+		}
+
+		b := buf[0]
+
+		switch {
+		case b == 3: // Ctrl+C
+			clearAndEraseCompletion(&completionLineCount)
+			fmt.Print("\r\n")
+			return "", ErrInterrupted
+
+		case b == 13 || b == 10: // Enter
+			if pasting {
+				pasteBuf.WriteByte('\n')
+				continue
+			}
+			clearAndEraseCompletion(&completionLineCount)
+			fmt.Print("\r\n")
+			result := line.String()
+			if history != nil {
+				history.Add(result)
+			}
+			return result, nil
+
+		case b == 15: // Ctrl+O
+			clearAndEraseCompletion(&completionLineCount)
+			return "\x0f", nil
+
+		case b == 27: // ESC sequence
+			seq := make([]byte, 0, 4)
+			seq = append(seq, b)
+
+			if n, err := os.Stdin.Read(buf); err != nil || n == 0 {
+				continue
+			}
+			if buf[0] != '[' && buf[0] != 'O' {
+				continue
+			}
+			seq = append(seq, buf[0])
+
+			if n, err := os.Stdin.Read(buf); err != nil || n == 0 {
+				continue
+			}
+			seq = append(seq, buf[0])
+
+			// Bracket paste detection
+			if seq[1] == '[' && buf[0] == '2' {
+				pasteSeq := make([]byte, 3)
+				if n, err := os.Stdin.Read(pasteSeq); err != nil || n < 3 {
+					continue
+				}
+				if pasteSeq[0] == '0' && pasteSeq[1] == '0' && pasteSeq[2] == '~' {
+					pasting = true
+					pasteBuf.Reset()
+					continue
+				}
+				if pasteSeq[0] == '0' && pasteSeq[1] == '1' && pasteSeq[2] == '~' {
+					pasting = false
+					pasted := cleanPastedContent(pasteBuf.String())
+					if pasted != "" {
+						clearAndEraseCompletion(&completionLineCount)
+						line.WriteString(pasted)
+						prevLineCount = redrawLine(prompt, line.String(), prevLineCount)
+						completionLineCount = tryShowCompletion(line.String(), &selectedIdx)
+					}
+					continue
+				}
+				continue
+			}
+
+			// Arrow keys for history
+			switch buf[0] {
+			case 'A': // Up arrow
+				if history != nil {
+					clearAndEraseCompletion(&completionLineCount)
+					if entry, ok := history.Older(); ok {
+						line.Reset()
+						line.WriteString(entry)
+						prevLineCount = redrawLine(prompt, line.String(), prevLineCount)
+					}
+				}
+			case 'B': // Down arrow
+				if history != nil {
+					clearAndEraseCompletion(&completionLineCount)
+					if entry, ok := history.Newer(); ok {
+						line.Reset()
+						line.WriteString(entry)
+						prevLineCount = redrawLine(prompt, line.String(), prevLineCount)
+					} else {
+						line.Reset()
+						prevLineCount = redrawLine(prompt, line.String(), prevLineCount)
+					}
+				}
+			}
+			continue
+
+		case b == 127 || b == 8: // Backspace
+			if line.Len() > 0 {
+				str := line.String()
+				runes := []rune(str)
+				runes = runes[:len(runes)-1]
+				line.Reset()
+				line.WriteString(string(runes))
+				clearAndEraseCompletion(&completionLineCount)
+				prevLineCount = redrawLine(prompt, line.String(), prevLineCount)
+				completionLineCount = tryShowCompletion(line.String(), &selectedIdx)
+			}
+
+		case b == 9: // Tab
+			if completionLineCount > 0 {
+				matches := matchCommands(line.String())
+				if len(matches) > 0 {
+					clearAndEraseCompletion(&completionLineCount)
+					if len(matches) > 1 {
+						selectedIdx = (selectedIdx + 1) % len(matches)
+						line.Reset()
+						line.WriteString("/" + matches[selectedIdx].Name)
+					} else {
+						line.Reset()
+						line.WriteString("/" + matches[0].Name)
+					}
+					prevLineCount = redrawLine(prompt, line.String(), prevLineCount)
+					if len(matches) > 1 {
+						completionLineCount = showCompletion(matches, selectedIdx)
+					}
+				}
+			}
+
+		default:
+			if pasting {
+				if b >= 32 && b < 127 {
+					pasteBuf.WriteByte(b)
+				}
+				continue
+			}
+			if b >= 32 && b < 127 {
+				clearAndEraseCompletion(&completionLineCount)
+				line.WriteByte(b)
+				prevLineCount = redrawLine(prompt, line.String(), prevLineCount)
+				completionLineCount = tryShowCompletion(line.String(), &selectedIdx)
+			}
+		}
+	}
+}
+
+// WaitForInputOrSignal reads stdin non-blocking, returning any input line or
+// empty string if interrupted by the done channel before a full line was read.
+func WaitForInputOrSignal(prompt string, done <-chan struct{}) string {
+	ch := make(chan string, 1)
+	go func() {
+		oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+		if err != nil {
+			return
+		}
+		defer func() { _ = term.Restore(int(os.Stdin.Fd()), oldState) }()
+
+		fmt.Print(prompt)
+
+		buf := make([]byte, 1)
+		var line strings.Builder
+
+		for {
+			n, err := os.Stdin.Read(buf)
+			if err != nil || n == 0 {
+				if line.Len() > 0 {
+					ch <- line.String()
+				}
+				ch <- ""
+				return
+			}
+
+			b := buf[0]
+			switch {
+			case b == 13 || b == 10: // Enter
+				fmt.Print("\r\n")
+				ch <- line.String()
+				return
+			case b == 3: // Ctrl+C
+				fmt.Print("\r\n")
+				ch <- ""
+				return
+			case b == 127 || b == 8: // Backspace
+				if line.Len() > 0 {
+					str := line.String()
+					runes := []rune(str)
+					runes = runes[:len(runes)-1]
+					line.Reset()
+					line.WriteString(string(runes))
+					fmt.Print("\r\033[K" + prompt + line.String())
+				}
+			default:
+				if b >= 32 && b < 127 {
+					line.WriteByte(b)
+					fmt.Print(string(b))
+				}
+			}
+		}
+	}()
+
+	select {
+	case line := <-ch:
+		return line
+	case <-done:
+		return ""
+	case <-time.After(50 * time.Millisecond):
+		return ""
+	}
+}
+
+// cleanPastedContent cleans up pasted content: removes carriage returns,
+// preserves newlines for multi-line paste, and strips other control characters.
+func cleanPastedContent(pasted string) string {
+	pasted = strings.Map(func(r rune) rune {
+		if r == '\r' {
+			return -1 // Remove carriage returns
+		}
+		if r < 32 && r != '\n' && r != '\t' {
+			return -1 // Strip other control chars but keep newlines and tabs
+		}
+		return r
+	}, pasted)
+	pasted = strings.TrimSpace(pasted)
+	return pasted
 }
 
 // clearAndEraseCompletion erases completion suggestions and resets the counter to 0.
@@ -122,10 +568,20 @@ func tryShowCompletion(input string, selectedIdx *int) int {
 	return 0
 }
 
-// redrawLine clears the current line and redraws prompt + content.
-// After calling this the cursor is positioned after the content.
-func redrawLine(prompt, content string) {
-	fmt.Print("\r\033[K" + prompt + content)
+// redrawLine clears the current line(s) and redraws prompt + content.
+// prevLines is the number of lines previously displayed (1 = single line).
+// Returns the new number of lines occupied by the content.
+func redrawLine(prompt, content string, prevLines int) int {
+	// Move up to clear previous multi-line content
+	for i := 0; i < prevLines-1; i++ {
+		fmt.Print("\033[A") // move up
+	}
+	// Clear from cursor to end of screen (handles all lines below)
+	fmt.Print("\r\033[J")
+	// Draw the new content
+	fmt.Print(prompt + content)
+	// Return new line count
+	return strings.Count(content, "\n") + 1
 }
 
 // matchCommands returns commands whose name or alias starts with the input.
@@ -160,7 +616,6 @@ func showCompletion(specs []commands.Spec, selected int) int {
 		return 0
 	}
 
-	// Build all the lines first so we know exactly how many we print.
 	var lines []string
 	for i, spec := range specs {
 		style := Dim
@@ -182,19 +637,12 @@ func showCompletion(specs []commands.Spec, selected int) int {
 		lines = append(lines, fmt.Sprintf("%s%s/%s%s - %s%s", icon, style, spec.Name, hint+aliases, spec.Summary, Reset))
 	}
 
-	// Cursor is at end of input line. Move down and print each suggestion.
 	for _, l := range lines {
 		fmt.Print("\r\n" + l)
 	}
 	totalLines := len(lines)
 
-	// Move cursor back up to the input line.
 	fmt.Printf("\033[%dA", totalLines)
-
-	// Now cursor is at column 0 of the input line.
-	// We need it at the end of the prompt+content so the next typed
-	// character appears in the right place. Move right by a large number —
-	// the terminal clamps it to the actual end of line content.
 	fmt.Print("\033[999C")
 
 	return totalLines
@@ -208,14 +656,10 @@ func eraseCompletion(lineCount int) {
 	if lineCount == 0 {
 		return
 	}
-	// Move cursor down to the last suggestion line
 	fmt.Printf("\033[%dB", lineCount)
-	// Erase all lines moving back up to (and including) the first suggestion line
 	for i := 0; i < lineCount; i++ {
 		ClearLine()
 		MoveUp(1)
 	}
-	// One final clear for the line we landed on
 	ClearLine()
-	// Cursor is now at column 0 of the input line
 }

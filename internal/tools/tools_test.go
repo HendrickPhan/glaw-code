@@ -276,18 +276,291 @@ func TestExecuteToolUnknown(t *testing.T) {
 	}
 }
 
+// --- Analyze Tool Tests ---
+
+// createMultiLangProject creates a temporary project with Go, Python, JavaScript, and TypeScript files.
+func createMultiLangProject(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+
+	// Go project files
+	os.MkdirAll(filepath.Join(dir, "cmd", "server"), 0o755)
+	os.MkdirAll(filepath.Join(dir, "internal", "api"), 0o755)
+	os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module github.com/test/project\n\ngo 1.22\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "cmd", "server", "main.go"), []byte(`package main
+
+import (
+	"fmt"
+	"github.com/test/project/internal/api"
+)
+
+func main() {
+	fmt.Println("hello")
+}
+`), 0o644)
+	os.WriteFile(filepath.Join(dir, "internal", "api", "server.go"), []byte(`package api
+
+import "net/http"
+
+// Server represents an HTTP server.
+type Server struct{}
+
+func NewServer() *Server { return &Server{} }
+`), 0o644)
+	os.WriteFile(filepath.Join(dir, "internal", "api", "server_test.go"), []byte(`package api
+
+import "testing"
+
+func TestNewServer(t *testing.T) {}
+`), 0o644)
+
+	// Python project files
+	os.MkdirAll(filepath.Join(dir, "src", "myapp"), 0o755)
+	os.WriteFile(filepath.Join(dir, "src", "myapp", "__init__.py"), []byte(`"""My application package."""
+
+import os
+import sys
+
+def main():
+    print("hello from python")
+`), 0o644)
+	os.WriteFile(filepath.Join(dir, "src", "myapp", "utils.py"), []byte(`"""Utility functions."""
+
+import json
+import re
+
+def helper(x):
+    return x.strip()
+`), 0o644)
+	os.WriteFile(filepath.Join(dir, "src", "myapp", "test_utils.py"), []byte(`"""Tests for utils."""
+
+import unittest
+
+class TestUtils(unittest.TestCase):
+    def test_helper(self):
+        self.assertEqual(helper("  hi  "), "hi")
+`), 0o644)
+	os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("flask==2.0\nrequests==2.28\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte(`[project]
+name = "myapp"
+version = "0.1.0"
+`), 0o644)
+
+	// JavaScript / TypeScript project files
+	os.MkdirAll(filepath.Join(dir, "web", "src"), 0o755)
+	os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name": "myapp-web", "dependencies": {"express": "^4.18"}}}
+`), 0o644)
+	os.WriteFile(filepath.Join(dir, "web", "src", "index.js"), []byte(`const express = require('express');
+
+function handler(req, res) {
+    res.send('hello');
+}
+`), 0o644)
+	os.WriteFile(filepath.Join(dir, "web", "src", "app.ts"), []byte(`import express from 'express';
+
+interface App {
+    port: number;
+}
+
+function createApp(config: App) {
+    return config;
+}
+`), 0o644)
+	os.WriteFile(filepath.Join(dir, "web", "src", "app.test.ts"), []byte(`import { createApp } from './app';
+
+describe('createApp', () => {
+    it('works', () => {
+        expect(createApp({ port: 3000 })).toBeDefined();
+    });
+});
+`), 0o644)
+
+	// Docs & config
+	os.WriteFile(filepath.Join(dir, "README.md"), []byte(`# Test Project
+Multi-language test project.
+`), 0o644)
+	os.WriteFile(filepath.Join(dir, "Makefile"), []byte(`build:\n\tgo build ./...\n`), 0o644)
+	os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(`FROM golang:1.22\nCOPY . .\n`), 0o644)
+
+	// Create .git to test exclusion
+	os.MkdirAll(filepath.Join(dir, ".git", "objects"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte("ref: refs/heads/main"), 0o644)
+
+	// Create node_modules to test exclusion
+	os.MkdirAll(filepath.Join(dir, "node_modules", "express"), 0o755)
+	os.WriteFile(filepath.Join(dir, "node_modules", "express", "index.js"), []byte("module.exports = {};"), 0o644)
+
+	return dir
+}
+
+func TestAnalyzeToolFullMode(t *testing.T) {
+	dir := createMultiLangProject(t)
+	r := NewRegistry(dir)
+
+	out, err := r.ExecuteTool(context.Background(), "analyze", json.RawMessage(`{"mode":"full"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.IsError {
+		t.Fatalf("unexpected error: %s", out.Content)
+	}
+
+	// Verify key sections
+	for _, section := range []string{"PROJECT ANALYSIS REPORT", "Structure", "Lines of Code",
+		"File Type Distribution", "Infrastructure", "Modules", "Dependencies"} {
+		if !strings.Contains(out.Content, section) {
+			t.Errorf("missing section %q in full analysis output", section)
+		}
+	}
+
+	// Verify multiple languages detected
+	for _, lang := range []string{"go", "python", "javascript", "typescript"} {
+		if !strings.Contains(out.Content, lang) {
+			t.Errorf("should detect %s language", lang)
+		}
+	}
+
+	// Verify .glaw/analysis.json saved
+	analysisPath := filepath.Join(dir, ".glaw", "analysis.json")
+	if _, err := os.Stat(analysisPath); os.IsNotExist(err) {
+		t.Error(".glaw/analysis.json should exist after full analysis")
+	}
+}
+
+func TestAnalyzeToolSummaryMode(t *testing.T) {
+	dir := createMultiLangProject(t)
+	r := NewRegistry(dir)
+
+	// Run full first to create cache
+	r.ExecuteTool(context.Background(), "analyze", json.RawMessage(`{"mode":"full"}`))
+
+	// Now run summary — should load from cache
+	out, err := r.ExecuteTool(context.Background(), "analyze", json.RawMessage(`{"mode":"summary"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.IsError {
+		t.Fatalf("unexpected error: %s", out.Content)
+	}
+	if !strings.Contains(out.Content, "PROJECT ANALYSIS REPORT") {
+		t.Error("summary should contain report header")
+	}
+	if !strings.Contains(out.Content, "cached from") {
+		t.Error("summary should indicate it came from cache")
+	}
+}
+
+func TestAnalyzeToolGraphMode(t *testing.T) {
+	dir := createMultiLangProject(t)
+	r := NewRegistry(dir)
+
+	out, err := r.ExecuteTool(context.Background(), "analyze", json.RawMessage(`{"mode":"graph","format":"mermaid"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.IsError {
+		t.Fatalf("unexpected error: %s", out.Content)
+	}
+	if !strings.Contains(out.Content, "graph TD") {
+		t.Error("mermaid graph should contain 'graph TD'")
+	}
+
+	// Test DOT format
+	out, err = r.ExecuteTool(context.Background(), "analyze", json.RawMessage(`{"mode":"graph","format":"dot"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.IsError {
+		t.Fatalf("unexpected error: %s", out.Content)
+	}
+	if !strings.Contains(out.Content, "digraph") {
+		t.Error("DOT graph should contain 'digraph'")
+	}
+
+	// Test JSON adjacency format
+	out, err = r.ExecuteTool(context.Background(), "analyze", json.RawMessage(`{"mode":"graph","format":"json"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.IsError {
+		t.Fatalf("unexpected error: %s", out.Content)
+	}
+	var adj map[string][]string
+	if err := json.Unmarshal([]byte(out.Content), &adj); err != nil {
+		t.Errorf("JSON adjacency parse error: %v", err)
+	}
+}
+
+func TestAnalyzeToolInvalidMode(t *testing.T) {
+	r := NewRegistry(t.TempDir())
+	out, err := r.ExecuteTool(context.Background(), "analyze", json.RawMessage(`{"mode":"invalid"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.IsError {
+		t.Error("expected error for invalid mode")
+	}
+}
+
+func TestAnalyzeDetectsMultipleLanguages(t *testing.T) {
+	dir := createMultiLangProject(t)
+	r := NewRegistry(dir)
+
+	out, err := r.ExecuteTool(context.Background(), "analyze", json.RawMessage(`{"mode":"full"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.IsError {
+		t.Fatalf("unexpected error: %s", out.Content)
+	}
+
+	// Verify infrastructure flags
+	if !strings.Contains(out.Content, "go.mod") {
+		t.Error("should detect go.mod")
+	}
+	if !strings.Contains(out.Content, "package.json") {
+		t.Error("should detect package.json")
+	}
+	if !strings.Contains(out.Content, "pyproject.toml") {
+		t.Error("should detect pyproject.toml")
+	}
+	if !strings.Contains(out.Content, "requirements.txt") {
+		t.Error("should detect requirements.txt")
+	}
+	if !strings.Contains(out.Content, "Dockerfile") {
+		t.Error("should detect Dockerfile")
+	}
+	if !strings.Contains(out.Content, "Makefile") {
+		t.Error("should detect Makefile")
+	}
+
+	// Verify test files counted
+	if !strings.Contains(out.Content, "Test Files") {
+		t.Error("should show test file count")
+	}
+
+	// Verify .git and node_modules excluded
+	for _, excluded := range []string{".git/", "node_modules/"} {
+		for _, line := range strings.Split(out.Content, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), excluded) {
+				t.Errorf("excluded directory %q should not appear in top-level dirs", excluded)
+			}
+		}
+	}
+}
+
 func TestGetToolSpecs(t *testing.T) {
 	r := NewRegistry(t.TempDir())
 	specs := r.GetToolSpecs()
-	if len(specs) != 22 {
-		t.Errorf("expected 22 tool specs, got %d", len(specs))
+	if len(specs) != 23 {
+		t.Errorf("expected 23 tool specs, got %d", len(specs))
 	}
 
 	names := make(map[string]bool)
 	for _, s := range specs {
 		names[s.Name] = true
 	}
-	for _, name := range []string{"bash", "read_file", "write_file", "edit_file", "glob_search", "grep_search", "web_fetch", "web_search", "todo_write", "tool_search", "notebook_edit", "sleep", "send_user_message", "config", "lsp_go_to_definition", "lsp_find_references", "lsp_hover", "lsp_document_symbol", "lsp_workspace_symbol", "lsp_go_to_implementation", "lsp_incoming_calls", "lsp_outgoing_calls"} {
+	for _, name := range []string{"bash", "read_file", "write_file", "edit_file", "glob_search", "grep_search", "web_fetch", "web_search", "todo_write", "tool_search", "notebook_edit", "sleep", "send_user_message", "config", "analyze", "lsp_go_to_definition", "lsp_find_references", "lsp_hover", "lsp_document_symbol", "lsp_workspace_symbol", "lsp_go_to_implementation", "lsp_incoming_calls", "lsp_outgoing_calls"} {
 		if !names[name] {
 			t.Errorf("missing tool spec: %s", name)
 		}
