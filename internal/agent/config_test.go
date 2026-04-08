@@ -473,6 +473,7 @@ func TestGetBuiltinSubAgent(t *testing.T) {
 	config := GetBuiltinSubAgent("Explore")
 	if config == nil {
 		t.Fatal("GetBuiltinSubAgent(Explore) returned nil")
+		return
 	}
 	if config.Name != "Explore" {
 		t.Errorf("Name = %q", config.Name)
@@ -516,6 +517,7 @@ func TestBuiltinAgentToolPermissions(t *testing.T) {
 			config := GetBuiltinSubAgent(tt.name)
 			if config == nil {
 				t.Fatalf("Agent %q not found", tt.name)
+				return
 			}
 
 			has := func(name string) bool {

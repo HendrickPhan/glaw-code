@@ -32,7 +32,6 @@ type BackgroundCommand struct {
 	Output    string
 	Error     error
 	cancel    context.CancelFunc
-	process   *os.Process
 	mu        sync.RWMutex
 }
 
