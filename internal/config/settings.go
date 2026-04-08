@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // DefaultGlobalDir is the default global config directory name.
@@ -229,17 +230,53 @@ func LoadAll(workspaceRoot string) (Settings, error) {
 // deriveFromEnv fills in API config from environment variables set by the env block.
 func (s *Settings) deriveFromEnv() {
 	if s.APIKey == "" {
-		if v := os.Getenv("ANTHROPIC_AUTH_TOKEN"); v != "" {
-			s.APIKey = v
-		} else if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
-			s.APIKey = v
+		switch {
+		case strings.HasPrefix(s.Model, "gpt-") || strings.HasPrefix(s.Model, "o3") || strings.HasPrefix(s.Model, "o4-"):
+			if v := os.Getenv("OPENAI_API_KEY"); v != "" {
+				s.APIKey = v
+			}
+		case strings.HasPrefix(s.Model, "gemini-"):
+			if v := os.Getenv("GEMINI_API_KEY"); v != "" {
+				s.APIKey = v
+			} else if v := os.Getenv("GOOGLE_API_KEY"); v != "" {
+				s.APIKey = v
+			}
+		case strings.HasPrefix(s.Model, "grok"):
+			if v := os.Getenv("XAI_API_KEY"); v != "" {
+				s.APIKey = v
+			}
+		case strings.HasPrefix(s.Model, "ollama:"):
+			// No key needed for Ollama
+		default:
+			if v := os.Getenv("ANTHROPIC_AUTH_TOKEN"); v != "" {
+				s.APIKey = v
+			} else if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
+				s.APIKey = v
+			}
 		}
 	}
+
 	if s.APIBaseURL == "" {
-		if v := os.Getenv("ANTHROPIC_BASE_URL"); v != "" {
-			s.APIBaseURL = v
+		switch {
+		case strings.HasPrefix(s.Model, "gpt-") || strings.HasPrefix(s.Model, "o3") || strings.HasPrefix(s.Model, "o4-"):
+			if v := os.Getenv("OPENAI_BASE_URL"); v != "" {
+				s.APIBaseURL = v
+			}
+		case strings.HasPrefix(s.Model, "gemini-"):
+			if v := os.Getenv("GEMINI_BASE_URL"); v != "" {
+				s.APIBaseURL = v
+			}
+		case strings.HasPrefix(s.Model, "ollama:"):
+			if v := os.Getenv("OLLAMA_BASE_URL"); v != "" {
+				s.APIBaseURL = v
+			}
+		default:
+			if v := os.Getenv("ANTHROPIC_BASE_URL"); v != "" {
+				s.APIBaseURL = v
+			}
 		}
 	}
+
 	if s.Model == "" || s.Model == "claude-sonnet-4-6" {
 		if v := os.Getenv("ANTHROPIC_DEFAULT_SONNET_MODEL"); v != "" {
 			s.Model = v

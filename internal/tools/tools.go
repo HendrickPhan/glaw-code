@@ -134,9 +134,14 @@ func (r *Registry) registerBuiltinTools() {
 			}, r.analyzeTool},
 		{api.ToolDefinition{
 			Name:        "sub_agent",
-			Description: "Delegate a task to a specialized sub-agent (e.g., Explore, Plan, Verification, code-reviewer, security-auditor, test-writer, docs-writer, refactorer, general-purpose, or any custom agent). The sub-agent runs with isolated context and returns a summary.",
-			InputSchema: json.RawMessage(`{"type":"object","properties":{"agent_name":{"type":"string","description":"Name of the sub-agent to use. Available agents: Explore, Plan, Verification, code-reviewer, security-auditor, test-writer, docs-writer, refactorer, general-purpose, or any custom agent defined in .glaw/agents/"},"prompt":{"type":"string","description":"The task description to delegate to the sub-agent. Be specific about what the agent should do."},"wait":{"type":"boolean","description":"Whether to wait for the sub-agent to complete before returning. Default: true.","default":true}},"required":["agent_name","prompt"]}`),
+			Description: "Delegate a task to a specialized sub-agent (e.g., Explore, Plan, Verification, code-reviewer, security-auditor, test-writer, docs-writer, refactorer, general-purpose, or any custom agent). The sub-agent runs asynchronously in the background. Returns a job ID that can be used with sub_agent_result to fetch the output when ready, or use wait=true to block until done.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"agent_name":{"type":"string","description":"Name of the sub-agent to use. Available agents: Explore, Plan, Verification, code-reviewer, security-auditor, test-writer, docs-writer, refactorer, general-purpose, or any custom agent defined in .glaw/agents/"},"prompt":{"type":"string","description":"The task description to delegate to the sub-agent. Be specific about what the agent should do."},"wait":{"type":"boolean","description":"Whether to wait for the sub-agent to complete before returning. Default: false (runs in background). Set to true only for quick tasks where you need the result immediately."}},"required":["agent_name","prompt"]}`),
 		}, r.subAgentTool},
+			{api.ToolDefinition{
+				Name:        "sub_agent_result",
+				Description: "Fetch the result of a background sub-agent job. If the job is still running, this will wait until it completes. Use this after sub_agent returns a job ID (when wait=false) to get the final output.",
+				InputSchema: json.RawMessage(`{"type":"object","properties":{"job_id":{"type":"string","description":"The job ID returned by the sub_agent tool"}},"required":["job_id"]}`),
+			}, r.subAgentResultTool},
 	}
 
 	for _, t := range tools {
@@ -791,7 +796,7 @@ func (r *Registry) subAgentTool(ctx context.Context, input json.RawMessage) (*ru
 		return &runtime.ToolOutput{Content: "prompt is required", IsError: true}, nil
 	}
 
-	wait := true
+	wait := false
 	if args.Wait != nil {
 		wait = *args.Wait
 	}
@@ -807,7 +812,7 @@ func (r *Registry) subAgentTool(ctx context.Context, input json.RawMessage) (*ru
 
 	if !wait {
 		return &runtime.ToolOutput{
-			Content: fmt.Sprintf("Sub-agent task %q spawned in background (ID: %s)", args.AgentName, task.ID),
+			Content: fmt.Sprintf("Sub-agent %q spawned in background (job ID: %s). The agent is now running. You can do other work and call sub_agent_result with job_id=%q when you need the output.", args.AgentName, task.ID, task.ID),
 			IsError: false,
 		}, nil
 	}
@@ -826,6 +831,73 @@ func (r *Registry) subAgentTool(ctx context.Context, input json.RawMessage) (*ru
 	return &runtime.ToolOutput{
 		Content: output,
 		IsError: isError,
+	}, nil
+}
+
+func (r *Registry) subAgentResultTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
+	var args struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
+	}
+	if args.JobID == "" {
+		return &runtime.ToolOutput{Content: "job_id is required", IsError: true}, nil
+	}
+
+	if r.orchestrator == nil {
+		return &runtime.ToolOutput{Content: "Sub-agent orchestrator not configured", IsError: true}, nil
+	}
+
+	// Check if already in a terminal state first
+	task, err := r.orchestrator.GetTask(args.JobID)
+	if err != nil {
+		return &runtime.ToolOutput{Content: fmt.Sprintf("Job %q not found.", args.JobID), IsError: true}, nil
+	}
+
+	switch task.Status {
+	case "cancelled":
+		return &runtime.ToolOutput{
+			Content: fmt.Sprintf("Job %s was cancelled.", args.JobID),
+			IsError: false,
+		}, nil
+	case "failed":
+		errMsg := "unknown error"
+		if task.Result != nil && task.Result.Error != nil {
+			errMsg = task.Result.Error.Error()
+		}
+		return &runtime.ToolOutput{
+			Content: fmt.Sprintf("Job %s failed: %s", args.JobID, errMsg),
+			IsError: true,
+		}, nil
+	case "completed":
+		if task.Result != nil {
+			return &runtime.ToolOutput{
+				Content: task.Result.Output,
+				IsError: false,
+			}, nil
+		}
+		return &runtime.ToolOutput{
+			Content: fmt.Sprintf("Job %s completed with no output.", args.JobID),
+			IsError: false,
+		}, nil
+	}
+
+	// Still running/pending — block until the job finishes.
+	// This prevents the LLM from entering a polling loop.
+	result, err := r.orchestrator.WaitTask(args.JobID)
+	if err != nil {
+		return &runtime.ToolOutput{Content: fmt.Sprintf("Job %s failed: %v", args.JobID, err), IsError: true}, nil
+	}
+
+	output := result.Output
+	if result.Error != nil {
+		output = fmt.Sprintf("Sub-agent error: %v\n%s", result.Error, output)
+	}
+
+	return &runtime.ToolOutput{
+		Content: output,
+		IsError: result.Error != nil,
 	}, nil
 }
 

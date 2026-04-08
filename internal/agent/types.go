@@ -23,6 +23,18 @@ type AgentResult struct {
 	Error      error  `json:"-"`
 }
 
+// AgentJob represents a background agent job tracked by the Manager.
+type AgentJob struct {
+	ID          string
+	AgentType   string
+	Prompt      string
+	Status      string // pending, running, completed, failed, cancelled
+	Result      *AgentResult
+	StartTime   time.Time
+	EndTime     *time.Time
+	Foreground  bool // whether user is currently waiting on this
+}
+
 // AgentType enumerates the supported agent specialisations.
 type AgentType string
 

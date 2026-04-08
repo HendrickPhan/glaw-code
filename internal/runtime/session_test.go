@@ -286,8 +286,24 @@ func TestPricingForModel(t *testing.T) {
 	}
 
 	sonnet := PricingForModel("claude-sonnet-4-6")
-	if sonnet.InputCostPerMillion != 15.0 {
-		t.Errorf("sonnet input = %v, want 15.0", sonnet.InputCostPerMillion)
+	if sonnet.InputCostPerMillion != 3.0 {
+		t.Errorf("sonnet input = %v, want 3.0", sonnet.InputCostPerMillion)
+	}
+
+	// Non-Anthropic models
+	gpt4o := PricingForModel("gpt-4o")
+	if gpt4o.InputCostPerMillion != 2.5 {
+		t.Errorf("gpt-4o input = %v, want 2.5", gpt4o.InputCostPerMillion)
+	}
+
+	gemini := PricingForModel("gemini-2.5-pro")
+	if gemini.InputCostPerMillion != 1.25 {
+		t.Errorf("gemini-2.5-pro input = %v, want 1.25", gemini.InputCostPerMillion)
+	}
+
+	ollama := PricingForModel("ollama:llama3")
+	if ollama.InputCostPerMillion != 0 {
+		t.Errorf("ollama input = %v, want 0", ollama.InputCostPerMillion)
 	}
 }
 

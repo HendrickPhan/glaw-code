@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hieu-glaw/glaw-code/internal/commands"
 )
@@ -703,13 +704,30 @@ func TestE2ECmdAgentsCallWithQuotedPrompt(t *testing.T) {
 	d := commands.NewDispatcher(newMockRuntimeFS(t.TempDir()))
 	d.SetAgentsProvider(&agentAgentsProviderStub{})
 
-	// Test /agents call with a quoted prompt
+	// Test /agents call with a quoted prompt (non-blocking by default)
 	result := handleCmd(t, d, `/agents call Explore "Search for all error handling patterns"`)
 	if !strings.Contains(result.Message, "Explore") {
 		t.Errorf("call result should mention agent name: %q", result.Message)
 	}
-	if !strings.Contains(result.Message, "Search for all error handling patterns") {
-		t.Errorf("call result should include prompt: %q", result.Message)
+	if !strings.Contains(result.Message, "spawned in background") {
+		t.Errorf("call result should mention background spawn: %q", result.Message)
+	}
+	if !strings.Contains(result.Message, "Job ID:") {
+		t.Errorf("call result should include job ID: %q", result.Message)
+	}
+}
+
+func TestE2ECmdAgentsCallWithWait(t *testing.T) {
+	d := commands.NewDispatcher(newMockRuntimeFS(t.TempDir()))
+	d.SetAgentsProvider(&agentAgentsProviderStub{})
+
+	// Test /agents call with --wait flag (blocking mode)
+	result := handleCmd(t, d, `/agents call Explore "Search for patterns" --wait`)
+	if !strings.Contains(result.Message, "Explore") {
+		t.Errorf("call --wait result should mention agent name: %q", result.Message)
+	}
+	if !strings.Contains(result.Message, "result:") {
+		t.Errorf("call --wait result should include result: %q", result.Message)
 	}
 }
 
@@ -876,6 +894,31 @@ func (a *agentAgentsProviderStub) DeleteAgent(workspaceRoot, name, scope string)
 func (a *agentAgentsProviderStub) CallAgent(ctx context.Context, name, prompt string) (string, error) {
 	// Stub: return a mock response
 	return fmt.Sprintf("Agent %q executed with prompt: %s", name, prompt), nil
+}
+
+func (a *agentAgentsProviderStub) CallAgentBackground(ctx context.Context, name, prompt string) (string, error) {
+	return fmt.Sprintf("agent-stub-%d", time.Now().UnixMilli()), nil
+}
+
+func (a *agentAgentsProviderStub) GetAgentJobStatus(jobID string) (*commands.AgentJobStatus, error) {
+	return &commands.AgentJobStatus{
+		ID:        jobID,
+		AgentType: "general-purpose",
+		Status:    "completed",
+		Prompt:    "stub prompt",
+	}, nil
+}
+
+func (a *agentAgentsProviderStub) ListAgentJobs() []*commands.AgentJobStatus {
+	return nil
+}
+
+func (a *agentAgentsProviderStub) WaitAgentJob(jobID string) (string, error) {
+	return fmt.Sprintf("Stub result for job %s", jobID), nil
+}
+
+func (a *agentAgentsProviderStub) CancelAgentJob(jobID string) error {
+	return nil
 }
 
 // --- Bughunter ---

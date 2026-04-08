@@ -57,7 +57,7 @@ func main() {
 		client, err := api.NewProviderClient(cfg.Model)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating API client: %v\n", err)
-			fmt.Fprintf(os.Stderr, "Set ANTHROPIC_API_KEY or XAI_API_KEY environment variable.\n")
+			fmt.Fprintf(os.Stderr, "Set the appropriate API key environment variable (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, or XAI_API_KEY).\n")
 			os.Exit(1)
 		}
 
@@ -76,6 +76,9 @@ func main() {
 			permManager := runtime.NewPermissionManager(cfg.PermissionMode, workspaceRoot)
 			rt := runtime.NewConversationRuntime(client, cfg, sess, permManager, toolExec)
 			rt.Snapshotter = snapshotExec
+			rt.ClientFactory = func(model string) (api.ProviderClient, error) {
+				return api.NewProviderClient(model)
+			}
 			cleanup := func() {
 				snapshotExec.FinishBatch()
 			}
@@ -104,7 +107,7 @@ func main() {
 		noInput     bool
 	)
 
-	flag.StringVar(&model, "model", "", "Model to use (e.g. claude-sonnet-4-6, grok-3)")
+	flag.StringVar(&model, "model", "", "Model to use (e.g. claude-sonnet-4-6, gpt-4o, gemini-2.5-pro, grok-3, ollama:llama3)")
 	flag.StringVar(&permissions, "permissions", "", "Permission mode (read_only, workspace_write, danger_full_access)")
 	flag.StringVar(&sessionID, "session", "", "Session ID to resume")
 	flag.StringVar(&configPath, "config", "", "Path to config file")
@@ -156,7 +159,7 @@ func main() {
 	client, err := api.NewProviderClient(cfg.Model)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating API client: %v\n", err)
-		fmt.Fprintf(os.Stderr, "Set ANTHROPIC_API_KEY or XAI_API_KEY environment variable.\n")
+		fmt.Fprintf(os.Stderr, "Set the appropriate API key environment variable (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, or XAI_API_KEY).\n")
 		os.Exit(1)
 	}
 
@@ -192,6 +195,9 @@ func main() {
 	// Create conversation runtime
 	rt := runtime.NewConversationRuntime(client, cfg, session, permManager, toolExec)
 	rt.Snapshotter = snapshotExec
+	rt.ClientFactory = func(model string) (api.ProviderClient, error) {
+		return api.NewProviderClient(model)
+	}
 
 	// Run
 	if prompt != "" {

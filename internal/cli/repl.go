@@ -264,13 +264,21 @@ func (r *REPL) Run(ctx context.Context) error {
 
 		shortDir := filepath.Base(displayDir)
 
-		// Check if there's a background action running
+		// Poll for completed background agent jobs and show notifications
+		completed := r.CmdDisp.PollCompletedAgentJobs()
+		for _, jobID := range completed {
+			fmt.Printf("%s  ✓ Background agent job %s completed. Use %s/agents logs %s%s to see output.%s\n", Green, jobID, Bold, jobID, Green, Reset)
+		}
+
+		// Check if there's a background action running or background agent jobs
 		r.bgMu.Lock()
 		hasBg := r.bgAction != nil
 		r.bgMu.Unlock()
 
+		hasAgentJobs := r.CmdDisp.HasRunningAgentJobs()
+
 		var promptStr string
-		if hasBg {
+		if hasBg || hasAgentJobs {
 			promptStr = fmt.Sprintf("%s%s⚡>%s ", Yellow+Bold, shortDir, Reset)
 		} else {
 			promptStr = fmt.Sprintf("%s%s>%s ", Green+Bold, shortDir, Reset)

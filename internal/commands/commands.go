@@ -8,10 +8,21 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hieu-glaw/glaw-code/internal/tasks"
 )
+
+// AgentJobStatus holds the status of a background agent job.
+type AgentJobStatus struct {
+	ID        string     `json:"id"`
+	AgentType string     `json:"agent_type"`
+	Status    string     `json:"status"`
+	Prompt    string     `json:"prompt"`
+	StartTime time.Time  `json:"start_time"`
+	EndTime   *time.Time `json:"end_time,omitempty"`
+}
 
 // Category groups commands.
 type Category string
@@ -67,6 +78,12 @@ type AgentsProvider interface {
 	CreateAgent(workspaceRoot, name, description, scope string, tools []string, model, prompt string) error
 	DeleteAgent(workspaceRoot, name, scope string) error
 	CallAgent(ctx context.Context, name, prompt string) (string, error)
+	// Background agent job management
+	CallAgentBackground(ctx context.Context, name, prompt string) (string, error) // returns job ID
+	GetAgentJobStatus(jobID string) (*AgentJobStatus, error)
+	ListAgentJobs() []*AgentJobStatus
+	WaitAgentJob(jobID string) (string, error)
+	CancelAgentJob(jobID string) error
 }
 
 // Runtime provides the interface commands need.
@@ -130,7 +147,7 @@ var Specs = []Spec{
 	{Name: "export", Summary: "Export session data", ArgumentHint: "[filename]", Category: CategorySession},
 	{Name: "session", Summary: "Session management", ArgumentHint: "[list|load|new|delete|resume]", Category: CategorySession},
 	{Name: "plugin", Summary: "Plugin management", ArgumentHint: "[install|enable|disable|list]", Category: CategoryCore},
-	{Name: "agents", Summary: "Agent management", ArgumentHint: "[list|show|create|call|edit|delete] [args]", Category: CategoryCore},
+	{Name: "agents", Summary: "Agent management", ArgumentHint: "[list|show|create|call|edit|delete|jobs|status|fg|cancel|logs|wait] [args]", Category: CategoryCore},
 	{Name: "skills", Summary: "List available skills", Category: CategoryCore},
 	{Name: "btw", Summary: "Ask a side question during execution", ArgumentHint: "<question>", Category: CategoryCore},
 	{Name: "tasks", Summary: "Manage agent tasks", ArgumentHint: "[create|list|update|delete] [args]", Category: CategoryCore},
@@ -218,6 +235,58 @@ func NewDispatcher(rt Runtime) *Dispatcher {
 // This must be called before /agents is used if dynamic agent loading is desired.
 func (d *Dispatcher) SetAgentsProvider(p AgentsProvider) {
 	d.agentsProvider = p
+}
+
+// HasRunningAgentJobs returns true if there are any background agent jobs
+// that are still running or pending.
+func (d *Dispatcher) HasRunningAgentJobs() bool {
+	if d.agentsProvider == nil {
+		return false
+	}
+	for _, j := range d.agentsProvider.ListAgentJobs() {
+		if j.Status == "running" || j.Status == "pending" {
+			return true
+		}
+	}
+	return false
+}
+
+// PollCompletedAgentJobs returns job IDs that have completed since the last
+// call and marks them as notified so they are not reported again.
+func (d *Dispatcher) PollCompletedAgentJobs() []string {
+	if d.agentsProvider == nil {
+		return nil
+	}
+	var completed []string
+	for _, j := range d.agentsProvider.ListAgentJobs() {
+		if j.Status == "completed" || j.Status == "failed" || j.Status == "cancelled" {
+			if !d.isJobNotified(j.ID) {
+				completed = append(completed, j.ID)
+				d.markJobNotified(j.ID)
+			}
+		}
+	}
+	return completed
+}
+
+// notifiedJobs tracks which completed jobs have already been announced.
+var notifiedJobs map[string]bool
+var notifiedMu sync.Mutex
+
+func init() {
+	notifiedJobs = make(map[string]bool)
+}
+
+func (d *Dispatcher) isJobNotified(id string) bool {
+	notifiedMu.Lock()
+	defer notifiedMu.Unlock()
+	return notifiedJobs[id]
+}
+
+func (d *Dispatcher) markJobNotified(id string) {
+	notifiedMu.Lock()
+	defer notifiedMu.Unlock()
+	notifiedJobs[id] = true
 }
 
 // Handle parses and dispatches a slash command.
@@ -972,8 +1041,35 @@ func (d *Dispatcher) handleAgents(remainder string) (*Result, error) {
 			return &Result{Action: "continue", Message: "Usage: /agents delete <name> [--project|--user]\nDelete a custom agent."}, nil
 		}
 		return d.handleAgentsDelete(parts[1:])
+	case "jobs":
+		return d.handleAgentsJobs()
+	case "status":
+		if len(parts) < 2 {
+			return &Result{Action: "continue", Message: "Usage: /agents status <job-id>"}, nil
+		}
+		return d.handleAgentsJobStatus(parts[1])
+	case "fg":
+		if len(parts) < 2 {
+			return &Result{Action: "continue", Message: "Usage: /agents fg <job-id>"}, nil
+		}
+		return d.handleAgentsFg(parts[1])
+	case "cancel":
+		if len(parts) < 2 {
+			return &Result{Action: "continue", Message: "Usage: /agents cancel <job-id>"}, nil
+		}
+		return d.handleAgentsCancel(parts[1])
+	case "logs":
+		if len(parts) < 2 {
+			return &Result{Action: "continue", Message: "Usage: /agents logs <job-id>"}, nil
+		}
+		return d.handleAgentsLogs(parts[1])
+	case "wait":
+		if len(parts) < 2 {
+			return &Result{Action: "continue", Message: "Usage: /agents wait <job-id>"}, nil
+		}
+		return d.handleAgentsWait(parts[1])
 	default:
-		return &Result{Action: "continue", Message: "Agent Management:\n\n  /agents                   List all available agents\n  /agents list              List all available agents\n  /agents show <name>       Show detailed agent information\n  /agents create <name>     Create a new custom agent\n  /agents call <name> <prompt>   Call (run) an agent with a prompt\n  /agents edit <name>       Edit an existing custom agent\n  /agents delete <name>     Delete a custom agent\n"}, nil
+		return &Result{Action: "continue", Message: "Agent Management:\n\n  /agents                       List all available agents\n  /agents list                  List all available agents\n  /agents show <name>           Show detailed agent information\n  /agents create <name>         Create a new custom agent\n  /agents call <name> <prompt>  Run an agent in background\n  /agents call <name> <prompt> --wait  Run agent and block until done\n  /agents edit <name>           Edit an existing custom agent\n  /agents delete <name>         Delete a custom agent\n\n  Background Job Management:\n  /agents jobs                  List all background agent jobs\n  /agents status <job-id>       Show detailed job status\n  /agents fg <job-id>           Bring job to foreground (wait for result)\n  /agents cancel <job-id>       Cancel a running job\n  /agents logs <job-id>         Show output of a completed job\n  /agents wait <job-id>         Wait for job to complete\n"}, nil
 	}
 }
 
@@ -1157,25 +1253,53 @@ Examples:
 
 func (d *Dispatcher) handleAgentsCall(parts []string) (*Result, error) {
 	if len(parts) < 2 {
-		return &Result{Action: "continue", Message: "Usage: /agents call <name> <prompt>\nCall (run) an agent with a task prompt.\n\nExample:\n  /agents call Explore \"Search for all error handling patterns\""}, nil
+		return &Result{Action: "continue", Message: "Usage: /agents call <name> <prompt> [--wait]\nRun an agent with a task prompt.\nBy default runs in background. Use --wait to block until done.\n\nExample:\n  /agents call Explore \"Search for all error handling patterns\"\n  /agents call Explore \"Search for patterns\" --wait"}, nil
 	}
 
 	name := parts[0]
 	// After parseQuotedFields, quoted content is already merged into single tokens.
 	// If there are multiple remaining parts, join them (handles unquoted multi-word prompts).
-	taskPrompt := strings.Join(parts[1:], " ")
+	remaining := parts[1:]
+
+	// Check for --wait flag
+	wait := false
+	var promptParts []string
+	for _, p := range remaining {
+		if p == "--wait" || p == "-w" {
+			wait = true
+		} else {
+			promptParts = append(promptParts, p)
+		}
+	}
+
+	if len(promptParts) == 0 {
+		return &Result{Action: "continue", Message: "Usage: /agents call <name> <prompt> [--wait]"}, nil
+	}
+
+	taskPrompt := strings.Join(promptParts, " ")
 
 	if d.agentsProvider == nil {
 		return &Result{Action: "continue", Message: "No agent provider configured."}, nil
 	}
 
 	ctx := context.Background()
-	output, err := d.agentsProvider.CallAgent(ctx, name, taskPrompt)
-	if err != nil {
-		return &Result{Action: "continue", Message: fmt.Sprintf("Agent %q failed: %s", name, err.Error())}, nil
+
+	if wait {
+		// Blocking mode: old behavior
+		output, err := d.agentsProvider.CallAgent(ctx, name, taskPrompt)
+		if err != nil {
+			return &Result{Action: "continue", Message: fmt.Sprintf("Agent %q failed: %s", name, err.Error())}, nil
+		}
+		return &Result{Action: "continue", Message: fmt.Sprintf("Agent %q result:\n\n%s", name, output)}, nil
 	}
 
-	return &Result{Action: "continue", Message: fmt.Sprintf("Agent %q result:\n\n%s", name, output)}, nil
+	// Non-blocking mode: spawn in background
+	jobID, err := d.agentsProvider.CallAgentBackground(ctx, name, taskPrompt)
+	if err != nil {
+		return &Result{Action: "continue", Message: fmt.Sprintf("Failed to spawn agent %q: %s", name, err.Error())}, nil
+	}
+
+	return &Result{Action: "continue", Message: fmt.Sprintf("Agent %q spawned in background.\n  Job ID: %s\n\nUse /agents jobs to list jobs, /agents status %s for details, /agents fg %s to bring to foreground.", name, jobID, jobID, jobID)}, nil
 }
 
 func (d *Dispatcher) handleAgentsEdit(parts []string) (*Result, error) {
@@ -1311,6 +1435,144 @@ func (d *Dispatcher) handleAgentsDelete(parts []string) (*Result, error) {
 	}
 
 	return &Result{Action: "continue", Message: fmt.Sprintf("Agent %q deleted.", name)}, nil
+}
+
+// --- Agent Job Management ---
+
+func (d *Dispatcher) handleAgentsJobs() (*Result, error) {
+	if d.agentsProvider == nil {
+		return &Result{Action: "continue", Message: "No agent provider configured."}, nil
+	}
+
+	jobs := d.agentsProvider.ListAgentJobs()
+	if len(jobs) == 0 {
+		return &Result{Action: "continue", Message: "No agent jobs. Use /agents call <name> <prompt> to spawn one."}, nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Agent Jobs (%d):\n\n", len(jobs)))
+	for _, j := range jobs {
+		prompt := j.Prompt
+		if len(prompt) > 50 {
+			prompt = prompt[:47] + "..."
+		}
+		elapsed := ""
+		if j.EndTime != nil {
+			elapsed = fmt.Sprintf(" (%s)", j.EndTime.Sub(j.StartTime).Round(time.Millisecond))
+		} else {
+			elapsed = fmt.Sprintf(" (running %s)", time.Since(j.StartTime).Round(time.Second))
+		}
+		sb.WriteString(fmt.Sprintf("  %s  [%s] %-16s %s%s\n", j.ID, j.Status, j.AgentType, prompt, elapsed))
+	}
+
+	sb.WriteString("\nUse /agents status <id> for details, /agents fg <id> to bring to foreground.")
+	return &Result{Action: "continue", Message: sb.String()}, nil
+}
+
+func (d *Dispatcher) handleAgentsJobStatus(jobID string) (*Result, error) {
+	if d.agentsProvider == nil {
+		return &Result{Action: "continue", Message: "No agent provider configured."}, nil
+	}
+
+	job, err := d.agentsProvider.GetAgentJobStatus(jobID)
+	if err != nil {
+		return &Result{Action: "continue", Message: fmt.Sprintf("Job %q not found.", jobID)}, nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Job ID:     %s\n", job.ID))
+	sb.WriteString(fmt.Sprintf("Agent:      %s\n", job.AgentType))
+	sb.WriteString(fmt.Sprintf("Status:     %s\n", job.Status))
+	sb.WriteString(fmt.Sprintf("Prompt:     %s\n", job.Prompt))
+	sb.WriteString(fmt.Sprintf("Started:    %s\n", job.StartTime.Format(time.RFC3339)))
+	if job.EndTime != nil {
+		sb.WriteString(fmt.Sprintf("Finished:   %s\n", job.EndTime.Format(time.RFC3339)))
+		sb.WriteString(fmt.Sprintf("Duration:   %s\n", job.EndTime.Sub(job.StartTime).Round(time.Millisecond)))
+	} else {
+		sb.WriteString(fmt.Sprintf("Duration:   %s (still running)\n", time.Since(job.StartTime).Round(time.Second)))
+	}
+
+	return &Result{Action: "continue", Message: sb.String()}, nil
+}
+
+func (d *Dispatcher) handleAgentsFg(jobID string) (*Result, error) {
+	if d.agentsProvider == nil {
+		return &Result{Action: "continue", Message: "No agent provider configured."}, nil
+	}
+
+	// Check the job exists and is not already terminal
+	job, err := d.agentsProvider.GetAgentJobStatus(jobID)
+	if err != nil {
+		return &Result{Action: "continue", Message: fmt.Sprintf("Job %q not found.", jobID)}, nil
+	}
+
+	if job.Status == "completed" || job.Status == "failed" {
+		// Already done — just show logs
+		return d.handleAgentsLogs(jobID)
+	}
+
+	if job.Status == "cancelled" {
+		return &Result{Action: "continue", Message: fmt.Sprintf("Job %q was cancelled.", jobID)}, nil
+	}
+
+	// Wait for it
+	output, err := d.agentsProvider.WaitAgentJob(jobID)
+	if err != nil {
+		return &Result{Action: "continue", Message: fmt.Sprintf("Job %q failed: %s", jobID, err.Error())}, nil
+	}
+
+	return &Result{Action: "continue", Message: fmt.Sprintf("Job %s completed.\n\n%s", jobID, output)}, nil
+}
+
+func (d *Dispatcher) handleAgentsCancel(jobID string) (*Result, error) {
+	if d.agentsProvider == nil {
+		return &Result{Action: "continue", Message: "No agent provider configured."}, nil
+	}
+
+	if err := d.agentsProvider.CancelAgentJob(jobID); err != nil {
+		return &Result{Action: "continue", Message: "Failed to cancel job: " + err.Error()}, nil
+	}
+
+	return &Result{Action: "continue", Message: fmt.Sprintf("Job %s cancelled.", jobID)}, nil
+}
+
+func (d *Dispatcher) handleAgentsLogs(jobID string) (*Result, error) {
+	if d.agentsProvider == nil {
+		return &Result{Action: "continue", Message: "No agent provider configured."}, nil
+	}
+
+	job, err := d.agentsProvider.GetAgentJobStatus(jobID)
+	if err != nil {
+		return &Result{Action: "continue", Message: fmt.Sprintf("Job %q not found.", jobID)}, nil
+	}
+
+	if job.Status == "running" || job.Status == "pending" {
+		return &Result{Action: "continue", Message: fmt.Sprintf("Job %s is still %s. Use /agents fg %s to wait for it.", jobID, job.Status, jobID)}, nil
+	}
+
+	// For completed/failed jobs, wait to get the result (non-blocking for terminal states)
+	output, err := d.agentsProvider.WaitAgentJob(jobID)
+	if err != nil {
+		return &Result{Action: "continue", Message: fmt.Sprintf("Job %s error: %s", jobID, err.Error())}, nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Job %s [%s]:\n\n", jobID, job.Status))
+	sb.WriteString(output)
+	return &Result{Action: "continue", Message: sb.String()}, nil
+}
+
+func (d *Dispatcher) handleAgentsWait(jobID string) (*Result, error) {
+	if d.agentsProvider == nil {
+		return &Result{Action: "continue", Message: "No agent provider configured."}, nil
+	}
+
+	output, err := d.agentsProvider.WaitAgentJob(jobID)
+	if err != nil {
+		return &Result{Action: "continue", Message: fmt.Sprintf("Job %q failed: %s", jobID, err.Error())}, nil
+	}
+
+	return &Result{Action: "continue", Message: fmt.Sprintf("Job %s completed.\n\n%s", jobID, output)}, nil
 }
 
 // parseQuotedFields splits a string into fields like a shell would,

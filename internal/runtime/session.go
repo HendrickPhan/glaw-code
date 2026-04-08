@@ -473,14 +473,43 @@ func (t *UsageTracker) EstimateCost(model string) (float64, float64, float64) {
 
 // PricingForModel returns pricing for the given model.
 func PricingForModel(model string) ModelPricing {
+	lower := strings.ToLower(model)
+
+	// Anthropic pricing
 	switch {
-	case contains(model, "haiku"):
+	case contains(lower, "haiku"):
 		return ModelPricing{1.0, 5.0, 1.25, 0.1}
-	case contains(model, "opus"):
+	case contains(lower, "opus"):
 		return ModelPricing{15.0, 75.0, 18.75, 1.5}
-	default: // sonnet and others
-		return ModelPricing{15.0, 75.0, 18.75, 1.5}
+	case contains(lower, "sonnet"):
+		return ModelPricing{3.0, 15.0, 3.75, 0.3}
 	}
+
+	// OpenAI pricing
+	switch {
+	case contains(lower, "gpt-4.1"):
+		return ModelPricing{2.0, 8.0, 0, 0}
+	case contains(lower, "gpt-4o"):
+		return ModelPricing{2.5, 10.0, 0, 0}
+	case contains(lower, "o3") || contains(lower, "o4"):
+		return ModelPricing{10.0, 40.0, 0, 0}
+	}
+
+	// Gemini pricing
+	switch {
+	case contains(lower, "gemini-2.5-pro"):
+		return ModelPricing{1.25, 10.0, 0, 0}
+	case contains(lower, "gemini"):
+		return ModelPricing{0.15, 0.60, 0, 0} // flash models
+	}
+
+	// Ollama and unknown: no cost for local, approximate for others
+	if contains(lower, "ollama") {
+		return ModelPricing{0, 0, 0, 0}
+	}
+
+	// Default: sonnet-level pricing
+	return ModelPricing{3.0, 15.0, 3.75, 0.3}
 }
 
 // FormatUSD formats a float as USD string.
@@ -872,6 +901,10 @@ type ConversationRuntime struct {
 	// from the outside (typically by the CLI layer) to break the import cycle.
 	SubAgentMgr SubAgentSessionProvider
 
+	// ClientFactory creates a new provider client for the given model.
+	// If set, SetModel uses it to recreate the API client when the provider changes.
+	ClientFactory func(model string) (api.ProviderClient, error)
+
 	// PermissionChecker is called before each tool execution.
 	// If it returns false, the tool is not executed and the message is
 	// returned as to the model.
@@ -1161,9 +1194,15 @@ func (r *ConversationRuntime) GetModel() string {
 	return r.Config.Model
 }
 
-// SetModel changes the model.
+// SetModel changes the model. If a ClientFactory is set, it also recreates
+// the API client to match the new provider.
 func (r *ConversationRuntime) SetModel(model string) {
 	r.Config.Model = model
+	if r.ClientFactory != nil {
+		if newClient, err := r.ClientFactory(model); err == nil {
+			r.APIClient = newClient
+		}
+	}
 }
 
 // GetPermissionMode returns the current permission mode.

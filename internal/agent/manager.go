@@ -17,6 +17,7 @@ import (
 // methods from multiple goroutines.
 type Manager struct {
 	agents map[string]*Agent
+	jobs   map[string]*AgentJob
 	mu     sync.RWMutex
 	rt     *runtime.ConversationRuntime
 	seq    atomic.Int64
@@ -26,6 +27,7 @@ type Manager struct {
 func NewManager(rt *runtime.ConversationRuntime) *Manager {
 	return &Manager{
 		agents: make(map[string]*Agent),
+		jobs:   make(map[string]*AgentJob),
 		rt:     rt,
 	}
 }
@@ -70,6 +72,116 @@ func (m *Manager) List() []*AgentStatus {
 		statuses = append(statuses, a.StatusSnapshot())
 	}
 	return statuses
+}
+
+// SpawnBackground creates a new agent, starts it in a background goroutine,
+// and returns a Job handle immediately without waiting.  The caller can use
+// the returned AgentJob to monitor progress or wait for completion later.
+func (m *Manager) SpawnBackground(ctx context.Context, prompt string, agentType string) (*AgentJob, error) {
+	agent, err := m.Spawn(ctx, prompt, agentType)
+	if err != nil {
+		return nil, err
+	}
+
+	job := &AgentJob{
+		ID:        agent.ID,
+		AgentType: agentType,
+		Prompt:    prompt,
+		Status:    StatusPending,
+		StartTime: time.Now(),
+	}
+
+	m.mu.Lock()
+	m.jobs[job.ID] = job
+	m.mu.Unlock()
+
+	// Monitor the agent in a goroutine and update the job status when done.
+	go func() {
+		result := agent.Wait()
+
+		m.mu.Lock()
+		now := time.Now()
+		job.EndTime = &now
+		job.Result = result
+		if result.Error != nil {
+			job.Status = StatusFailed
+		} else {
+			job.Status = StatusCompleted
+		}
+		m.mu.Unlock()
+	}()
+
+	return job, nil
+}
+
+// ListJobs returns a snapshot of every tracked job.
+func (m *Manager) ListJobs() []*AgentJob {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	jobs := make([]*AgentJob, 0, len(m.jobs))
+	for _, j := range m.jobs {
+		jobs = append(jobs, j)
+	}
+	return jobs
+}
+
+// GetJob retrieves a job by its ID.
+func (m *Manager) GetJob(id string) (*AgentJob, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	j, ok := m.jobs[id]
+	if !ok {
+		return nil, fmt.Errorf("job %q not found", id)
+	}
+	return j, nil
+}
+
+// WaitJob blocks until the job with the given ID finishes and returns its result.
+func (m *Manager) WaitJob(id string) (*AgentResult, error) {
+	// Look up the underlying agent and wait on it.
+	a, err := m.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	result := a.Wait()
+
+	// Update job status.
+	m.mu.Lock()
+	now := time.Now()
+	if j, ok := m.jobs[id]; ok {
+		j.EndTime = &now
+		j.Result = result
+		if result.Error != nil {
+			j.Status = StatusFailed
+		} else {
+			j.Status = StatusCompleted
+		}
+	}
+	m.mu.Unlock()
+
+	if result.Error != nil {
+		return result, result.Error
+	}
+	return result, nil
+}
+
+// CancelJob requests cancellation of the job with the given ID.
+func (m *Manager) CancelJob(id string) error {
+	j, err := m.GetJob(id)
+	if err != nil {
+		return err
+	}
+	if j.Status == StatusCompleted || j.Status == StatusFailed || j.Status == StatusCancelled {
+		return fmt.Errorf("job %q already in terminal state: %s", id, j.Status)
+	}
+	m.mu.Lock()
+	j.Status = StatusCancelled
+	now := time.Now()
+	j.EndTime = &now
+	m.mu.Unlock()
+	return m.Cancel(id)
 }
 
 // Get retrieves an agent by its ID.  Returns an error if no agent with that ID
@@ -319,7 +431,7 @@ func (a *AgentsProviderAdapter) DeleteAgent(workspaceRoot, name, scope string) e
 
 // CallAgent runs a sub-agent by name with the given prompt and returns the
 // output as a string. It uses the Manager if available, otherwise returns
-// an error.
+// an error. This blocks until the agent completes.
 func (a *AgentsProviderAdapter) CallAgent(ctx context.Context, name string, prompt string) (string, error) {
 	if a.mgr == nil {
 		return "", fmt.Errorf("agent manager not available; cannot call agents from the CLI")
@@ -336,6 +448,80 @@ func (a *AgentsProviderAdapter) CallAgent(ctx context.Context, name string, prom
 	}
 
 	return result.Output, nil
+}
+
+// CallAgentBackground spawns a sub-agent in the background and returns the
+// job ID immediately without waiting for completion.
+func (a *AgentsProviderAdapter) CallAgentBackground(ctx context.Context, name string, prompt string) (string, error) {
+	if a.mgr == nil {
+		return "", fmt.Errorf("agent manager not available; cannot call agents from the CLI")
+	}
+
+	job, err := a.mgr.SpawnBackground(ctx, prompt, name)
+	if err != nil {
+		return "", fmt.Errorf("spawning agent %q: %w", name, err)
+	}
+
+	return job.ID, nil
+}
+
+// GetAgentJobStatus returns the current status of a background agent job.
+func (a *AgentsProviderAdapter) GetAgentJobStatus(jobID string) (*commands.AgentJobStatus, error) {
+	if a.mgr == nil {
+		return nil, fmt.Errorf("agent manager not available")
+	}
+	job, err := a.mgr.GetJob(jobID)
+	if err != nil {
+		return nil, err
+	}
+	return &commands.AgentJobStatus{
+		ID:        job.ID,
+		AgentType: job.AgentType,
+		Status:    job.Status,
+		Prompt:    job.Prompt,
+		StartTime: job.StartTime,
+		EndTime:   job.EndTime,
+	}, nil
+}
+
+// ListAgentJobs returns all tracked background agent jobs.
+func (a *AgentsProviderAdapter) ListAgentJobs() []*commands.AgentJobStatus {
+	if a.mgr == nil {
+		return nil
+	}
+	jobs := a.mgr.ListJobs()
+	result := make([]*commands.AgentJobStatus, len(jobs))
+	for i, j := range jobs {
+		result[i] = &commands.AgentJobStatus{
+			ID:        j.ID,
+			AgentType: j.AgentType,
+			Status:    j.Status,
+			Prompt:    j.Prompt,
+			StartTime: j.StartTime,
+			EndTime:   j.EndTime,
+		}
+	}
+	return result
+}
+
+// WaitAgentJob blocks until the given job completes and returns its output.
+func (a *AgentsProviderAdapter) WaitAgentJob(jobID string) (string, error) {
+	if a.mgr == nil {
+		return "", fmt.Errorf("agent manager not available")
+	}
+	result, err := a.mgr.WaitJob(jobID)
+	if err != nil {
+		return "", err
+	}
+	return result.Output, nil
+}
+
+// CancelAgentJob cancels a running background agent job.
+func (a *AgentsProviderAdapter) CancelAgentJob(jobID string) error {
+	if a.mgr == nil {
+		return fmt.Errorf("agent manager not available")
+	}
+	return a.mgr.CancelJob(jobID)
 }
 
 // --- runtime.SubAgentSessionProvider adapter ---

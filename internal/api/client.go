@@ -46,6 +46,7 @@ type ClientConfig struct {
 	MaxRetries int
 	Timeout    time.Duration
 	Headers    map[string]string
+	ModelAlias string // optional model name override (e.g., stripping "ollama:" prefix)
 }
 
 // AnthropicClient implements ProviderClient for the Anthropic API.
@@ -405,20 +406,35 @@ func (c *OpenAICompatClient) StreamMessage(ctx context.Context, req Request) (<-
 // OpenAI-compatible request/response types
 
 type oaiRequest struct {
-	Model    string        `json:"model"`
-	Messages []oaiMessage  `json:"messages"`
-	Tools    []oaiTool     `json:"tools,omitempty"`
-	Stream   bool          `json:"stream"`
+	Model       string       `json:"model"`
+	Messages    []oaiMessage `json:"messages"`
+	Tools       []oaiTool    `json:"tools,omitempty"`
+	Stream      bool         `json:"stream"`
+	MaxTokens   int          `json:"max_tokens,omitempty"`
+	Temperature float64      `json:"temperature,omitempty"`
 }
 
 type oaiMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string        `json:"role"`
+	Content    *string       `json:"content"`                  // nullable when tool_calls present
+	ToolCalls  []oaiToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string        `json:"tool_call_id,omitempty"`   // for role:"tool"
+}
+
+type oaiToolCall struct {
+	ID       string          `json:"id"`
+	Type     string          `json:"type"`
+	Function oaiToolCallFunc `json:"function"`
+}
+
+type oaiToolCallFunc struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 type oaiTool struct {
-	Type     string   `json:"type"`
-	Function oaiFunc  `json:"function"`
+	Type     string  `json:"type"`
+	Function oaiFunc `json:"function"`
 }
 
 type oaiFunc struct {
@@ -430,7 +446,9 @@ type oaiFunc struct {
 type oaiResponse struct {
 	Choices []oaiChoice `json:"choices"`
 	Usage   struct {
-		TotalTokens int `json:"total_tokens"`
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
 	} `json:"usage"`
 	Model string `json:"model"`
 }
@@ -442,19 +460,75 @@ type oaiChoice struct {
 
 func (c *OpenAICompatClient) convertRequest(req Request) oaiRequest {
 	var msgs []oaiMessage
-	for _, m := range req.Messages {
-		// Flatten content blocks to text
-		var text string
-		for _, b := range m.Content {
-			if b.Type == ContentText {
-				text += b.Text
-			}
-		}
-		msgs = append(msgs, oaiMessage{Role: string(m.Role), Content: text})
+
+	// System message first
+	if req.System != "" {
+		sysContent := req.System
+		msgs = append(msgs, oaiMessage{Role: "system", Content: &sysContent})
 	}
 
-	if req.System != "" {
-		msgs = append([]oaiMessage{{Role: "system", Content: req.System}}, msgs...)
+	for _, m := range req.Messages {
+		// Check if this message contains tool_result blocks
+		hasToolResult := false
+		for _, b := range m.Content {
+			if b.Type == ContentToolResult {
+				hasToolResult = true
+				break
+			}
+		}
+
+		if hasToolResult {
+			// Each tool_result becomes its own "tool" role message
+			for _, b := range m.Content {
+				if b.Type == ContentToolResult {
+					content := b.Content
+					msgs = append(msgs, oaiMessage{
+						Role:       "tool",
+						Content:    &content,
+						ToolCallID: b.ToolUseID,
+					})
+				}
+			}
+			continue
+		}
+
+		// For assistant messages: collect text + tool_use blocks
+		if m.Role == RoleAssistant {
+			var textParts []string
+			var toolCalls []oaiToolCall
+			for _, b := range m.Content {
+				switch b.Type {
+				case ContentText:
+					textParts = append(textParts, b.Text)
+				case ContentToolUse:
+					toolCalls = append(toolCalls, oaiToolCall{
+						ID:   b.ID,
+						Type: "function",
+						Function: oaiToolCallFunc{
+							Name:      b.Name,
+							Arguments: string(b.Input),
+						},
+					})
+				}
+			}
+			content := strings.Join(textParts, "")
+			msg := oaiMessage{Role: "assistant", Content: &content}
+			if len(toolCalls) > 0 {
+				msg.ToolCalls = toolCalls
+			}
+			msgs = append(msgs, msg)
+			continue
+		}
+
+		// Default: user text message
+		var textParts []string
+		for _, b := range m.Content {
+			if b.Type == ContentText {
+				textParts = append(textParts, b.Text)
+			}
+		}
+		content := strings.Join(textParts, "")
+		msgs = append(msgs, oaiMessage{Role: string(m.Role), Content: &content})
 	}
 
 	var tools []oaiTool
@@ -469,11 +543,18 @@ func (c *OpenAICompatClient) convertRequest(req Request) oaiRequest {
 		})
 	}
 
+	modelName := req.Model
+	if c.config.ModelAlias != "" {
+		modelName = c.config.ModelAlias
+	}
+
 	return oaiRequest{
-		Model:    req.Model,
-		Messages: msgs,
-		Tools:    tools,
-		Stream:   false,
+		Model:       modelName,
+		Messages:    msgs,
+		Tools:       tools,
+		Stream:      false,
+		MaxTokens:   req.MaxTokens,
+		Temperature: req.Temperature,
 	}
 }
 
@@ -486,14 +567,35 @@ func (c *OpenAICompatClient) convertResponse(body []byte) (*Response, error) {
 	resp := &Response{
 		Model: oaiResp.Model,
 		Usage: Usage{
-			InputTokens:  oaiResp.Usage.TotalTokens, // approximate
-			OutputTokens: oaiResp.Usage.TotalTokens,
+			InputTokens:  oaiResp.Usage.PromptTokens,
+			OutputTokens: oaiResp.Usage.CompletionTokens,
 		},
 	}
 
 	if len(oaiResp.Choices) > 0 {
 		choice := oaiResp.Choices[0]
-		resp.Content = []ContentBlock{NewTextBlock(choice.Message.Content)}
+
+		var blocks []ContentBlock
+
+		// Text content (may be nil/empty when tool_calls present)
+		if choice.Message.Content != nil && *choice.Message.Content != "" {
+			blocks = append(blocks, NewTextBlock(*choice.Message.Content))
+		}
+
+		// Tool calls
+		for _, tc := range choice.Message.ToolCalls {
+			blocks = append(blocks, NewToolUseBlock(
+				tc.ID,
+				tc.Function.Name,
+				json.RawMessage(tc.Function.Arguments),
+			))
+		}
+
+		if len(blocks) == 0 {
+			blocks = []ContentBlock{NewTextBlock("")}
+		}
+		resp.Content = blocks
+
 		switch choice.FinishReason {
 		case "stop":
 			resp.StopReason = StopEndTurn
@@ -508,48 +610,305 @@ func (c *OpenAICompatClient) convertResponse(body []byte) (*Response, error) {
 }
 
 func (c *OpenAICompatClient) processOpenAISSEStream(r io.Reader, ch chan<- StreamEvent) {
-	events, err := ParseSSEStream(r)
-	if err != nil {
-		ch <- StreamEvent{Type: EventError, Error: err}
-		ch <- StreamEvent{Type: EventDone}
-		return
+	parser := NewSSEParser()
+	buf := make([]byte, 4096)
+
+	// Accumulate tool call arguments by index
+	type toolCallAcc struct {
+		ID   string
+		Name string
+		Args strings.Builder
+	}
+	toolCallAccum := make(map[int]*toolCallAcc)
+
+	var response Response
+
+	ch <- StreamEvent{Type: EventMessageStart, Content: nil}
+
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			events := parser.PushChunk(buf[:n])
+			for _, event := range events {
+				data := strings.TrimSpace(event.Data)
+				if data == "[DONE]" {
+					// Finalize accumulated tool calls into response content
+					for i := 0; i < len(toolCallAccum); i++ {
+						acc, ok := toolCallAccum[i]
+						if !ok {
+							continue
+						}
+						response.Content = append(response.Content, NewToolUseBlock(
+							acc.ID,
+							acc.Name,
+							json.RawMessage(acc.Args.String()),
+						))
+					}
+					if len(response.Content) == 0 {
+						response.Content = []ContentBlock{}
+					}
+					ch <- StreamEvent{Type: EventMessageStop, Content: &response}
+					ch <- StreamEvent{Type: EventDone}
+					return
+				}
+
+				var chunk struct {
+					Choices []struct {
+						Delta struct {
+							Role      string `json:"role"`
+							Content   *string `json:"content"`
+							ToolCalls []struct {
+								Index    int    `json:"index"`
+								ID       string `json:"id"`
+								Type     string `json:"type"`
+								Function struct {
+									Name      string `json:"name"`
+									Arguments string `json:"arguments"`
+								} `json:"function"`
+							} `json:"tool_calls"`
+						} `json:"delta"`
+						FinishReason *string `json:"finish_reason"`
+					} `json:"choices"`
+				}
+				if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+					continue
+				}
+				if len(chunk.Choices) == 0 {
+					continue
+				}
+
+				delta := chunk.Choices[0].Delta
+				finishReason := chunk.Choices[0].FinishReason
+
+				// Text delta
+				if delta.Content != nil && *delta.Content != "" {
+					ch <- StreamEvent{Type: EventContentBlockDelta, Content: *delta.Content}
+				}
+
+				// Tool call deltas — accumulate by index
+				for _, tc := range delta.ToolCalls {
+					acc, ok := toolCallAccum[tc.Index]
+					if !ok {
+						acc = &toolCallAcc{}
+						toolCallAccum[tc.Index] = acc
+					}
+					if tc.ID != "" {
+						acc.ID = tc.ID
+					}
+					if tc.Function.Name != "" {
+						acc.Name = tc.Function.Name
+					}
+					if tc.Function.Arguments != "" {
+						acc.Args.WriteString(tc.Function.Arguments)
+					}
+				}
+
+				// Finish reason
+				if finishReason != nil {
+					switch *finishReason {
+					case "stop":
+						response.StopReason = StopEndTurn
+					case "tool_calls":
+						response.StopReason = StopToolUse
+					case "length":
+						response.StopReason = StopMaxTokens
+					}
+					ch <- StreamEvent{Type: EventMessageDelta, Content: response.StopReason}
+				}
+			}
+		}
+		if err != nil {
+			if err != io.EOF {
+				ch <- StreamEvent{Type: EventError, Error: err}
+			}
+			break
+		}
 	}
 
-	for _, event := range events {
-		if strings.TrimSpace(event.Data) == "[DONE]" {
-			ch <- StreamEvent{Type: EventDone}
-			return
-		}
-
-		var payload map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(event.Data), &payload); err != nil {
+	// Finalize on unexpected stream end
+	for i := 0; i < len(toolCallAccum); i++ {
+		acc, ok := toolCallAccum[i]
+		if !ok {
 			continue
 		}
+		response.Content = append(response.Content, NewToolUseBlock(
+			acc.ID,
+			acc.Name,
+			json.RawMessage(acc.Args.String()),
+		))
+	}
+	if len(response.Content) == 0 {
+		response.Content = []ContentBlock{}
+	}
+	ch <- StreamEvent{Type: EventMessageStop, Content: &response}
+	ch <- StreamEvent{Type: EventDone}
+}
 
-		ch <- StreamEvent{Type: EventContentBlockDelta, Content: event.Data}
+// ProviderType identifies the LLM provider.
+type ProviderType string
+
+const (
+	ProviderAnthropic ProviderType = "anthropic"
+	ProviderOpenAI    ProviderType = "openai"
+	ProviderGemini    ProviderType = "gemini"
+	ProviderOllama    ProviderType = "ollama"
+	ProviderXAI       ProviderType = "xai"
+	ProviderOpenRouter ProviderType = "openrouter"
+)
+
+// ProviderInfo holds resolved provider configuration.
+type ProviderInfo struct {
+	Type    ProviderType
+	APIKey  string
+	BaseURL string
+}
+
+// DetectProvider determines the provider from model name and env vars.
+func DetectProvider(model string) ProviderInfo {
+	lower := strings.ToLower(model)
+
+	switch {
+	case strings.HasPrefix(lower, "grok"):
+		return ProviderInfo{Type: ProviderXAI}
+
+	case strings.HasPrefix(lower, "gpt-"),
+		strings.HasPrefix(lower, "o3"),
+		strings.HasPrefix(lower, "o4-"),
+		strings.HasPrefix(lower, "chatgpt-"):
+		return ProviderInfo{Type: ProviderOpenAI}
+
+	case strings.HasPrefix(lower, "gemini-"):
+		return ProviderInfo{Type: ProviderGemini}
+
+	case strings.HasPrefix(lower, "ollama:"):
+		return ProviderInfo{Type: ProviderOllama}
+
+	case strings.HasPrefix(lower, "openrouter:"):
+		return ProviderInfo{Type: ProviderOpenRouter}
+
+	default:
+		// Check if OLLAMA_BASE_URL is set with a non-prefixed model
+		if os.Getenv("OLLAMA_BASE_URL") != "" || os.Getenv("OLLAMA_HOST") != "" {
+			return ProviderInfo{Type: ProviderOllama}
+		}
+		return ProviderInfo{Type: ProviderAnthropic}
+	}
+}
+
+// Resolve fills in APIKey and BaseURL from environment variables.
+func (p ProviderInfo) Resolve(model string) (ProviderInfo, error) {
+	switch p.Type {
+	case ProviderXAI:
+		p.APIKey = os.Getenv("XAI_API_KEY")
+		if p.APIKey == "" {
+			return p, NewMissingCredentialsError("XAI_API_KEY not set")
+		}
+		p.BaseURL = os.Getenv("XAI_BASE_URL")
+		if p.BaseURL == "" {
+			p.BaseURL = "https://api.x.ai/v1"
+		}
+
+	case ProviderOpenAI:
+		p.APIKey = os.Getenv("OPENAI_API_KEY")
+		if p.APIKey == "" {
+			return p, NewMissingCredentialsError("OPENAI_API_KEY not set")
+		}
+		p.BaseURL = os.Getenv("OPENAI_BASE_URL")
+		if p.BaseURL == "" {
+			p.BaseURL = "https://api.openai.com/v1"
+		}
+
+	case ProviderGemini:
+		p.APIKey = os.Getenv("GEMINI_API_KEY")
+		if p.APIKey == "" {
+			p.APIKey = os.Getenv("GOOGLE_API_KEY")
+		}
+		if p.APIKey == "" {
+			return p, NewMissingCredentialsError("GEMINI_API_KEY or GOOGLE_API_KEY not set")
+		}
+		p.BaseURL = os.Getenv("GEMINI_BASE_URL")
+		if p.BaseURL == "" {
+			p.BaseURL = "https://generativelanguage.googleapis.com/v1beta/openai"
+		}
+
+	case ProviderOllama:
+		p.APIKey = "ollama" // dummy; Ollama doesn't require auth
+		p.BaseURL = os.Getenv("OLLAMA_BASE_URL")
+		if p.BaseURL == "" {
+			p.BaseURL = os.Getenv("OLLAMA_HOST")
+			if p.BaseURL != "" && !strings.HasPrefix(p.BaseURL, "http") {
+				p.BaseURL = "http://" + p.BaseURL
+			}
+		}
+		if p.BaseURL == "" {
+			p.BaseURL = "http://localhost:11434/v1"
+		} else if !strings.HasSuffix(p.BaseURL, "/v1") {
+			p.BaseURL = strings.TrimRight(p.BaseURL, "/") + "/v1"
+		}
+
+	case ProviderAnthropic:
+		p.APIKey = os.Getenv("ANTHROPIC_API_KEY")
+		if p.APIKey == "" {
+			p.APIKey = os.Getenv("ANTHROPIC_AUTH_TOKEN")
+		}
+		if p.APIKey == "" {
+			p.APIKey = os.Getenv("GLAW_API_KEY")
+		}
+		if p.APIKey == "" {
+			return p, NewMissingCredentialsError("ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or GLAW_API_KEY not set")
+		}
+		p.BaseURL = os.Getenv("ANTHROPIC_BASE_URL")
+		if p.BaseURL == "" {
+			p.BaseURL = "https://api.anthropic.com"
+		}
+
+		case ProviderOpenRouter:
+		p.APIKey = os.Getenv("OPENROUTER_API_KEY")
+		if p.APIKey == "" {
+			return p, NewMissingCredentialsError("OPENROUTER_API_KEY not set")
+		}
+		p.BaseURL = os.Getenv("OPENROUTER_BASE_URL")
+		if p.BaseURL == "" {
+			p.BaseURL = "https://openrouter.ai/api/v1"
+		}
+
 	}
 
-	ch <- StreamEvent{Type: EventDone}
+	return p, nil
 }
 
 // NewProviderClient creates the appropriate client based on model name.
 func NewProviderClient(model string) (ProviderClient, error) {
-	if strings.HasPrefix(model, "grok") {
-		apiKey := os.Getenv("XAI_API_KEY")
-		if apiKey == "" {
-			return nil, NewMissingCredentialsError("XAI_API_KEY not set")
-		}
-		baseURL := os.Getenv("XAI_BASE_URL")
-		if baseURL == "" {
-			baseURL = "https://api.x.ai/v1"
-		}
-		return NewOpenAICompatClient(ClientConfig{
-			APIKey:  apiKey,
-			BaseURL: baseURL,
-		}), nil
+	info := DetectProvider(model)
+	resolved, err := info.Resolve(model)
+	if err != nil {
+		return nil, err
 	}
 
-	return NewAnthropicClientFromEnv()
+	// Strip "ollama:" and "openrouter:" prefix from model name for the actual API call
+	actualModel := model
+	if info.Type == ProviderOllama && strings.HasPrefix(strings.ToLower(model), "ollama:") {
+		actualModel = model[7:]
+	}
+	if info.Type == ProviderOpenRouter && strings.HasPrefix(strings.ToLower(model), "openrouter:") {
+		actualModel = model[11:]
+	}
+
+	switch info.Type {
+	case ProviderAnthropic:
+		return NewAnthropicClient(ClientConfig{
+			APIKey:  resolved.APIKey,
+			BaseURL: resolved.BaseURL,
+		}), nil
+
+	default:
+		// OpenAI, Gemini, Ollama, xAI all use OpenAICompatClient
+		return NewOpenAICompatClient(ClientConfig{
+			APIKey:     resolved.APIKey,
+			BaseURL:    resolved.BaseURL,
+			ModelAlias: actualModel,
+		}), nil
+	}
 }
 
 func backoffDuration(attempt int) time.Duration {

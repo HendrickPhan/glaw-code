@@ -53,7 +53,7 @@ func TestE2EToolRegistrySpecs(t *testing.T) {
 		"web_search": false, "todo_write": false, "tool_search": false,
 		"notebook_edit": false, "sleep": false, "send_user_message": false,
 		"config": false, "analyze": false,
-		"sub_agent": false,
+		"sub_agent": false, "sub_agent_result": false,
 	}
 	for _, spec := range specs {
 		if _, ok := wantNames[spec.Name]; !ok {

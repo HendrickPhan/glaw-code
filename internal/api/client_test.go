@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -323,5 +324,327 @@ func TestOpenAICompatClientSendMessage(t *testing.T) {
 	}
 	if len(resp.Content) != 1 || resp.Content[0].Text != "Hello from Grok" {
 		t.Errorf("Content = %v", resp.Content)
+	}
+}
+
+func TestDetectProvider(t *testing.T) {
+	tests := []struct {
+		model string
+		want  ProviderType
+	}{
+		{"claude-sonnet-4-6", ProviderAnthropic},
+		{"claude-opus-4-6", ProviderAnthropic},
+		{"grok-3", ProviderXAI},
+		{"grok-3-mini", ProviderXAI},
+		{"gpt-4o", ProviderOpenAI},
+		{"gpt-4.1", ProviderOpenAI},
+		{"gpt-4o-mini", ProviderOpenAI},
+		{"o3", ProviderOpenAI},
+		{"o3-mini", ProviderOpenAI},
+		{"o4-mini", ProviderOpenAI},
+		{"gemini-2.5-pro", ProviderGemini},
+		{"gemini-2.0-flash", ProviderGemini},
+		{"gemini-2.5-flash", ProviderGemini},
+		{"ollama:llama3", ProviderOllama},
+		{"ollama:qwen2.5-coder", ProviderOllama},
+	}
+	for _, tt := range tests {
+		got := DetectProvider(tt.model)
+		if got.Type != tt.want {
+			t.Errorf("DetectProvider(%q) = %v, want %v", tt.model, got.Type, tt.want)
+		}
+	}
+}
+
+func TestDetectProviderOllamaEnvFallback(t *testing.T) {
+	t.Setenv("OLLAMA_BASE_URL", "http://localhost:11434")
+	got := DetectProvider("my-custom-model")
+	if got.Type != ProviderOllama {
+		t.Errorf("DetectProvider with OLLAMA_BASE_URL set = %v, want %v", got.Type, ProviderOllama)
+	}
+}
+
+func TestResolveProviderOpenAI(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "sk-test-123")
+	info := ProviderInfo{Type: ProviderOpenAI}
+	resolved, err := info.Resolve("gpt-4o")
+	if err != nil {
+		t.Fatalf("Resolve error: %v", err)
+	}
+	if resolved.APIKey != "sk-test-123" {
+		t.Errorf("APIKey = %q, want %q", resolved.APIKey, "sk-test-123")
+	}
+	if resolved.BaseURL != "https://api.openai.com/v1" {
+		t.Errorf("BaseURL = %q, want default OpenAI URL", resolved.BaseURL)
+	}
+}
+
+func TestResolveProviderGemini(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "gemini-test-key")
+	info := ProviderInfo{Type: ProviderGemini}
+	resolved, err := info.Resolve("gemini-2.5-pro")
+	if err != nil {
+		t.Fatalf("Resolve error: %v", err)
+	}
+	if resolved.APIKey != "gemini-test-key" {
+		t.Errorf("APIKey = %q, want %q", resolved.APIKey, "gemini-test-key")
+	}
+	if resolved.BaseURL != "https://generativelanguage.googleapis.com/v1beta/openai" {
+		t.Errorf("BaseURL = %q", resolved.BaseURL)
+	}
+}
+
+func TestResolveProviderGeminiGoogleKey(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "google-test-key")
+	info := ProviderInfo{Type: ProviderGemini}
+	resolved, err := info.Resolve("gemini-2.5-flash")
+	if err != nil {
+		t.Fatalf("Resolve error: %v", err)
+	}
+	if resolved.APIKey != "google-test-key" {
+		t.Errorf("APIKey = %q, want %q", resolved.APIKey, "google-test-key")
+	}
+}
+
+func TestResolveProviderOllama(t *testing.T) {
+	info := ProviderInfo{Type: ProviderOllama}
+	resolved, err := info.Resolve("ollama:llama3")
+	if err != nil {
+		t.Fatalf("Resolve error: %v", err)
+	}
+	if resolved.APIKey != "ollama" {
+		t.Errorf("APIKey = %q, want %q", resolved.APIKey, "ollama")
+	}
+	if resolved.BaseURL != "http://localhost:11434/v1" {
+		t.Errorf("BaseURL = %q", resolved.BaseURL)
+	}
+}
+
+func TestResolveProviderMissingKey(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	info := ProviderInfo{Type: ProviderOpenAI}
+	_, err := info.Resolve("gpt-4o")
+	if err == nil {
+		t.Fatal("expected error for missing API key")
+	}
+}
+
+func TestNewProviderClientOpenAI(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "sk-openai-test")
+	client, err := NewProviderClient("gpt-4o")
+	if err != nil {
+		t.Fatalf("NewProviderClient error: %v", err)
+	}
+	oaiClient, ok := client.(*OpenAICompatClient)
+	if !ok {
+		t.Fatal("expected *OpenAICompatClient")
+	}
+	if oaiClient.config.APIKey != "sk-openai-test" {
+		t.Errorf("APIKey = %q", oaiClient.config.APIKey)
+	}
+}
+
+func TestNewProviderClientOllamaStripPrefix(t *testing.T) {
+	client, err := NewProviderClient("ollama:llama3")
+	if err != nil {
+		t.Fatalf("NewProviderClient error: %v", err)
+	}
+	oaiClient, ok := client.(*OpenAICompatClient)
+	if !ok {
+		t.Fatal("expected *OpenAICompatClient")
+	}
+	if oaiClient.config.ModelAlias != "llama3" {
+		t.Errorf("ModelAlias = %q, want %q", oaiClient.config.ModelAlias, "llama3")
+	}
+}
+
+func TestOpenAICompatToolCallsResponse(t *testing.T) {
+	oaiResp := `{
+		"model": "gpt-4o",
+		"choices": [{"message": {"role": "assistant", "content": null, "tool_calls": [{"id": "call_abc123", "type": "function", "function": {"name": "bash", "arguments": "{\"command\":\"ls -la\"}"}}]}, "finish_reason": "tool_calls"}],
+		"usage": {"prompt_tokens": 50, "completion_tokens": 20, "total_tokens": 70}
+	}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, oaiResp)
+	}))
+	defer server.Close()
+
+	client := NewOpenAICompatClient(ClientConfig{
+		APIKey:  "test-key",
+		BaseURL: server.URL,
+	})
+
+	req := Request{
+		Model:     "gpt-4o",
+		MaxTokens: 1024,
+		Messages:  []Message{{Role: RoleUser, Content: []ContentBlock{NewTextBlock("list files")}}},
+		Tools: []ToolDefinition{
+			{Name: "bash", Description: "Run a command", InputSchema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"}}}`)},
+		},
+	}
+
+	resp, err := client.SendMessage(context.Background(), req)
+	if err != nil {
+		t.Fatalf("SendMessage error: %v", err)
+	}
+	if resp.StopReason != StopToolUse {
+		t.Errorf("StopReason = %q, want %q", resp.StopReason, StopToolUse)
+	}
+	if len(resp.Content) != 1 {
+		t.Fatalf("Content length = %d, want 1", len(resp.Content))
+	}
+	block := resp.Content[0]
+	if block.Type != ContentToolUse {
+		t.Errorf("Content[0].Type = %q, want %q", block.Type, ContentToolUse)
+	}
+	if block.Name != "bash" {
+		t.Errorf("Content[0].Name = %q, want %q", block.Name, "bash")
+	}
+	if block.ID != "call_abc123" {
+		t.Errorf("Content[0].ID = %q, want %q", block.ID, "call_abc123")
+	}
+	if resp.Usage.InputTokens != 50 {
+		t.Errorf("Usage.InputTokens = %d, want 50", resp.Usage.InputTokens)
+	}
+	if resp.Usage.OutputTokens != 20 {
+		t.Errorf("Usage.OutputTokens = %d, want 20", resp.Usage.OutputTokens)
+	}
+}
+
+func TestOpenAICompatToolResultConversion(t *testing.T) {
+	oaiResp := `{
+		"model": "gpt-4o",
+		"choices": [{"message": {"role": "assistant", "content": "Done"}, "finish_reason": "stop"}],
+		"usage": {"prompt_tokens": 30, "completion_tokens": 5, "total_tokens": 35}
+	}`
+
+	var capturedBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, oaiResp)
+	}))
+	defer server.Close()
+
+	client := NewOpenAICompatClient(ClientConfig{
+		APIKey:  "test-key",
+		BaseURL: server.URL,
+	})
+
+	req := Request{
+		Model:     "gpt-4o",
+		MaxTokens: 1024,
+		Messages: []Message{
+			{Role: RoleUser, Content: []ContentBlock{NewTextBlock("list files")}},
+			{Role: RoleAssistant, Content: []ContentBlock{NewToolUseBlock("call_1", "bash", json.RawMessage(`{"command":"ls"}`))}},
+			{Role: RoleUser, Content: []ContentBlock{NewToolResultBlock("call_1", "file1.txt\nfile2.txt", false)}},
+		},
+	}
+
+	_, err := client.SendMessage(context.Background(), req)
+	if err != nil {
+		t.Fatalf("SendMessage error: %v", err)
+	}
+
+	// Verify the request was converted correctly
+	var oaiReq oaiRequest
+	if err := json.Unmarshal(capturedBody, &oaiReq); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+
+	// Should have: system (none), user text, assistant with tool_calls, tool role with tool_call_id
+	if len(oaiReq.Messages) < 3 {
+		t.Fatalf("Messages length = %d, want >= 3", len(oaiReq.Messages))
+	}
+
+	// Assistant message should have tool_calls
+	assistantMsg := oaiReq.Messages[1]
+	if assistantMsg.Role != "assistant" {
+		t.Errorf("Message[1] Role = %q, want 'assistant'", assistantMsg.Role)
+	}
+	if len(assistantMsg.ToolCalls) != 1 {
+		t.Fatalf("Assistant ToolCalls length = %d, want 1", len(assistantMsg.ToolCalls))
+	}
+	if assistantMsg.ToolCalls[0].ID != "call_1" {
+		t.Errorf("ToolCall ID = %q, want %q", assistantMsg.ToolCalls[0].ID, "call_1")
+	}
+	if assistantMsg.ToolCalls[0].Function.Name != "bash" {
+		t.Errorf("ToolCall Name = %q, want %q", assistantMsg.ToolCalls[0].Function.Name, "bash")
+	}
+
+	// Tool result should be role:"tool" with tool_call_id
+	toolMsg := oaiReq.Messages[2]
+	if toolMsg.Role != "tool" {
+		t.Errorf("Message[2] Role = %q, want 'tool'", toolMsg.Role)
+	}
+	if toolMsg.ToolCallID != "call_1" {
+		t.Errorf("ToolCallID = %q, want %q", toolMsg.ToolCallID, "call_1")
+	}
+	if toolMsg.Content == nil || *toolMsg.Content != "file1.txt\nfile2.txt" {
+		t.Errorf("Content = %v, want 'file1.txt\\nfile2.txt'", toolMsg.Content)
+	}
+}
+
+func TestOpenAICompatStreaming(t *testing.T) {
+	sseData := `data: {"choices":[{"delta":{"role":"assistant","content":""}}]}
+
+data: {"choices":[{"delta":{"content":"Hello"}}]}
+
+data: {"choices":[{"delta":{"content":" world"}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, sseData)
+	}))
+	defer server.Close()
+
+	client := NewOpenAICompatClient(ClientConfig{
+		APIKey:  "test-key",
+		BaseURL: server.URL,
+	})
+
+	req := Request{
+		Model:    "gpt-4o",
+		Messages: []Message{{Role: RoleUser, Content: []ContentBlock{NewTextBlock("hi")}}},
+	}
+
+	ch, err := client.StreamMessage(context.Background(), req)
+	if err != nil {
+		t.Fatalf("StreamMessage error: %v", err)
+	}
+
+	var textDeltas []string
+	var gotMessageDelta bool
+	var gotDone bool
+	for event := range ch {
+		switch event.Type {
+		case EventContentBlockDelta:
+			if s, ok := event.Content.(string); ok {
+				textDeltas = append(textDeltas, s)
+			}
+		case EventMessageDelta:
+			gotMessageDelta = true
+		case EventDone:
+			gotDone = true
+		}
+	}
+
+	if !gotDone {
+		t.Error("expected EventDone")
+	}
+	if !gotMessageDelta {
+		t.Error("expected EventMessageDelta with finish_reason")
+	}
+	if len(textDeltas) != 2 || textDeltas[0] != "Hello" || textDeltas[1] != " world" {
+		t.Errorf("textDeltas = %v, want [Hello,  world]", textDeltas)
 	}
 }
