@@ -6,34 +6,85 @@
 
 - **Interactive REPL** with slash command autocomplete, markdown rendering, syntax highlighting, and animated tool execution
 - **Web UI** — Next.js-based interface with real-time WebSocket communication, session management, and tool call visualization
-- **23 built-in tools** — file read/write/edit, search, glob, bash execution, LSP integration, project analysis, and more
-- **Multi-provider AI** — Anthropic Claude, xAI Grok, OpenAI-compatible endpoints
+- **23 built-in tools** — file read/write/edit, search, glob, bash execution,  project analysis, and more
+- **Multi-provider AI** — Anthropic Claude, OpenAI GPT, Google Gemini, xAI Grok, OpenRouter (100+ models), Ollama (local)
 - **Session management** — save, resume, and switch sessions
 - **Permission system** — configurable modes (read_only, workspace_write, danger_full_access) with interactive prompts
 - **Undo/revert** — snapshot-based file revert without git
 - **MCP support** — Model Context Protocol for extending tools via external servers
-- **LSP integration** — Language Server Protocol for code intelligence
 - **Slash commands** — 30+ commands for git, sessions, config, agents, and more
 
 ## Quick Start
 
 ### Install
 
-```bash
-# From source
-git clone git@github.com:HendrickPhan/glaw-code.git
-cd glaw-code
-bash install.sh
+The fastest way to get **glaw-code** is with the official install script. It auto-detects your OS and architecture (macOS/Linux, amd64/arm64), downloads the right prebuilt binary, and puts `glaw` on your `PATH`.
 
-# Or one-liner
+**One-liner (recommended):**
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/HendrickPhan/glaw-code/main/install.sh | bash
 ```
 
+**Prefer to review the script first?**
+
+```bash
+# Download it
+curl -fsSL -o install.sh https://raw.githubusercontent.com/HendrickPhan/glaw-code/main/install.sh
+
+# Review it
+less install.sh
+
+# Run it
+bash install.sh
+```
+
+**Install from a cloned repo:**
+
+```bash
+git clone https://github.com/HendrickPhan/glaw-code.git
+cd glaw-code
+bash install.sh
+```
+
+> **What the installer does:**
+> 1. Detects your platform (macOS/Linux, amd64/arm64)
+> 2. Downloads the matching prebuilt binary from [GitHub Releases](https://github.com/HendrickPhan/glaw-code/releases) — or uses the local `prebuild/` directory if you cloned the repo
+> 3. Installs the `glaw` binary to `/usr/local/bin` (prompts for `sudo` if needed), or `~/.local/bin` as a fallback
+> 4. Creates a sample `~/.glaw/settings.json` configured with a free default model
+
 ### Requirements
 
-- Go 1.22+
-- Node.js 20+ (for web UI only)
-- `ANTHROPIC_API_KEY` or `XAI_API_KEY` environment variable
+- macOS or Linux (amd64 / arm64)
+- `curl` (for the one-liner install)
+- An API key from any supported provider (see below)
+
+### Supported Providers
+
+| Provider | Model Prefix | Env Var | Notes |
+|----------|-------------|---------|-------|
+| **OpenRouter** | `openrouter:` | `OPENROUTER_API_KEY` | Access to 100+ models, including free ones |
+| **Anthropic** | (default) | `ANTHROPIC_API_KEY` | Claude models |
+| **OpenAI** | `gpt-`, `o3`, `o4-` | `OPENAI_API_KEY` | GPT models |
+| **Google Gemini** | `gemini-` | `GEMINI_API_KEY` | Gemini models |
+| **xAI** | `grok` | `XAI_API_KEY` | Grok models |
+| **Ollama** | `ollama:` | (none) | Local models, no API key needed |
+
+### Quick Configuration
+
+Create `~/.glaw/settings.json` with your preferred provider:
+
+```json
+{
+  "model": "openrouter:nvidia/nemotron-3-super-120b-a12b:free",
+  "permissions": { "mode": "workspace_write" },
+  "env": {
+    "OPENROUTER_API_KEY": "your-key-here"
+  }
+}
+```
+
+> 💡 **Tip:** The OpenRouter model `nvidia/nemotron-3-super-120b-a12b:free` is free to use — perfect for getting started. Get an API key at [openrouter.ai/keys](https://openrouter.ai/keys).
 
 ### Usage
 
@@ -49,6 +100,10 @@ glaw serve --addr :8080 --open
 
 # With specific model
 glaw --model claude-sonnet-4-6
+glaw --model gpt-4o
+glaw --model gemini-2.5-pro
+glaw --model openrouter:nvidia/nemotron-3-super-120b-a12b:free
+glaw --model ollama:llama3
 
 # Resume session
 glaw --session sess_1234567890
@@ -69,7 +124,6 @@ internal/
   tools/                  # 23 built-in tool implementations
   web/                    # HTTP/WebSocket server, session store, static UI embedding
   tasks/                  # Task management for multi-step operations
-  lsp/                    # LSP client for code intelligence
   plugins/                # Plugin system (manifest-based)
 web/                      # Next.js 16 web UI (TypeScript + Tailwind)
 ```
@@ -87,7 +141,6 @@ web/                      # Next.js 16 web UI (TypeScript + Tailwind)
 | `get_file_info` | Get file metadata |
 | `glob` | Pattern-based file matching |
 | `bash` | Execute shell commands |
-| `lsp_*` | LSP operations (definition, references, hover, etc.) |
 | `web_fetch` | Fetch URL contents |
 | `ask_user` | Ask user a question during execution |
 | `notebook_edit` | Edit Jupyter notebooks |
@@ -179,12 +232,15 @@ Layered config system (later overrides earlier):
 4. `--config path/to/config.json` (explicit)
 5. CLI flags (`--model`, `--permissions`)
 
-Example `.glaw/settings.json`:
+Example `~/.glaw/settings.json`:
 
 ```json
 {
   "model": "claude-sonnet-4-6",
   "permissions": { "mode": "workspace_write" },
+  "env": {
+    "ANTHROPIC_API_KEY": "sk-ant-..."
+  },
   "mcpServers": {
     "context7": {
       "transport": "stdio",
@@ -194,6 +250,8 @@ Example `.glaw/settings.json`:
   }
 }
 ```
+
+> **API keys** can be set in the `env` block of `settings.json` or as environment variables. The `env` block is the recommended approach for persistent configuration.
 
 ## Web UI
 

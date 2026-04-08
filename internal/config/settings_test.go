@@ -9,8 +9,8 @@ import (
 
 func TestDefaultSettings(t *testing.T) {
 	s := DefaultSettings()
-	if s.Model != "claude-sonnet-4-6" {
-		t.Errorf("Model = %q, want %q", s.Model, "claude-sonnet-4-6")
+	if s.Model != "openrouter:nvidia/nemotron-3-super-120b-a12b:free" {
+		t.Errorf("Model = %q, want %q", s.Model, "openrouter:nvidia/nemotron-3-super-120b-a12b:free")
 	}
 	if s.MaxTokens != 16384 {
 		t.Errorf("MaxTokens = %d, want 16384", s.MaxTokens)
@@ -245,8 +245,8 @@ func TestLoadAllNoFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAll error: %v", err)
 	}
-	// Should get defaults
-	if loaded.Model != "claude-sonnet-4-6" {
+	// Should get the new default model
+	if loaded.Model != "openrouter:nvidia/nemotron-3-super-120b-a12b:free" {
 		t.Errorf("Model = %q, want default", loaded.Model)
 	}
 }
@@ -325,6 +325,8 @@ func TestApplyEnv(t *testing.T) {
 }
 
 func TestDeriveFromEnv(t *testing.T) {
+	// Clear any lingering env vars from the user's session
+	t.Setenv("OPENROUTER_API_KEY", "")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "derived-key")
 	t.Setenv("ANTHROPIC_BASE_URL", "https://derived.api")
 	t.Setenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "glm-5.1")
@@ -332,14 +334,53 @@ func TestDeriveFromEnv(t *testing.T) {
 	s := DefaultSettings()
 	s.deriveFromEnv()
 
+	// ANTHROPIC_DEFAULT_SONNET_MODEL should override the default model
+	if s.Model != "glm-5.1" {
+		t.Errorf("Model = %q, want %q", s.Model, "glm-5.1")
+	}
+	// After model override to glm-5.1 (non-prefixed → Anthropic), API key comes from ANTHROPIC_AUTH_TOKEN
 	if s.APIKey != "derived-key" {
 		t.Errorf("APIKey = %q, want %q", s.APIKey, "derived-key")
 	}
 	if s.APIBaseURL != "https://derived.api" {
 		t.Errorf("APIBaseURL = %q", s.APIBaseURL)
 	}
-	if s.Model != "glm-5.1" {
-		t.Errorf("Model = %q, want %q", s.Model, "glm-5.1")
+}
+
+func TestDeriveFromEnvOpenRouter(t *testing.T) {
+	// Clear model override and other provider keys to test openrouter in isolation
+	t.Setenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("OPENROUTER_API_KEY", "or-test-key")
+	t.Setenv("OPENROUTER_BASE_URL", "")
+
+	s := DefaultSettings() // model is openrouter:nvidia/nemotron-3-super-120b-a12b:free
+	s.deriveFromEnv()
+
+	if s.APIKey != "or-test-key" {
+		t.Errorf("APIKey = %q, want %q", s.APIKey, "or-test-key")
+	}
+}
+
+func TestDeriveFromEnvAnthropicModel(t *testing.T) {
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "anthropic-key")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://custom.api")
+	t.Setenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "")
+
+	s := Settings{
+		Model:        "claude-sonnet-4-6",
+		Permissions:  PermissionSettings{Mode: "workspace_write"},
+		MaxTokens:    16384,
+		Temperature:  func() *float64 { f := 1.0; return &f }(),
+	}
+	s.deriveFromEnv()
+
+	if s.APIKey != "anthropic-key" {
+		t.Errorf("APIKey = %q, want %q", s.APIKey, "anthropic-key")
+	}
+	if s.APIBaseURL != "https://custom.api" {
+		t.Errorf("APIBaseURL = %q", s.APIBaseURL)
 	}
 }
 
@@ -347,6 +388,7 @@ func TestLoadAllWithEnvBlock(t *testing.T) {
 	workspace := t.TempDir()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "")
 
 	// Write settings with env block (matches real ~/.glaw/settings.json)
 	globalDir := filepath.Join(home, DefaultGlobalDir)
@@ -354,6 +396,7 @@ func TestLoadAllWithEnvBlock(t *testing.T) {
 		t.Fatalf("MkdirAll error: %v", err)
 	}
 	settings := Settings{
+		Model: "claude-sonnet-4-6", // explicitly set Anthropic model
 		Env: map[string]string{
 			"ANTHROPIC_AUTH_TOKEN": "test-token-123",
 			"ANTHROPIC_BASE_URL":   "https://api.z.ai/api/anthropic",

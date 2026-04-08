@@ -508,6 +508,11 @@ func PricingForModel(model string) ModelPricing {
 		return ModelPricing{0, 0, 0, 0}
 	}
 
+	// OpenRouter free models
+	if contains(lower, "openrouter:") && contains(lower, ":free") {
+		return ModelPricing{0, 0, 0, 0}
+	}
+
 	// Default: sonnet-level pricing
 	return ModelPricing{3.0, 15.0, 3.75, 0.3}
 }
@@ -696,7 +701,7 @@ type Config struct {
 // DefaultConfig returns sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
-		Model:          "claude-sonnet-4-6",
+		Model:          "openrouter:nvidia/nemotron-3-super-120b-a12b:free",
 		MaxTokens:      16384,
 		Temperature:    1.0,
 		PermissionMode: PermWorkspaceWrite,

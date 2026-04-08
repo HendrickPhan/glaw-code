@@ -54,7 +54,7 @@ func (m *mockRuntime) ResumeSubAgentSession(agentID string) error {
 
 func newMockRuntime() *mockRuntime {
 	return &mockRuntime{
-		model:     "claude-sonnet-4-6",
+		model:     "openrouter:nvidia/nemotron-3-super-120b-a12b:free",
 		permMode:  "workspace_write",
 		sessionID: "sess_test",
 		msgCount:  5,
@@ -176,7 +176,7 @@ func TestHandleStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Message, "claude-sonnet-4-6") {
+	if !strings.Contains(result.Message, "openrouter:nvidia/nemotron-3-super-120b-a12b:free") {
 		t.Errorf("should contain model: %q", result.Message)
 	}
 	if !strings.Contains(result.Message, "sess_test") {
@@ -201,7 +201,7 @@ func TestHandleModelGet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Message, "claude-sonnet-4-6") {
+	if !strings.Contains(result.Message, "openrouter:nvidia/nemotron-3-super-120b-a12b:free") {
 		t.Errorf("Message = %q", result.Message)
 	}
 }

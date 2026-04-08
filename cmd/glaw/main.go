@@ -57,7 +57,8 @@ func main() {
 		client, err := api.NewProviderClient(cfg.Model)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating API client: %v\n", err)
-			fmt.Fprintf(os.Stderr, "Set the appropriate API key environment variable (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, or XAI_API_KEY).\n")
+			fmt.Fprintf(os.Stderr, "Set the appropriate API key environment variable or configure it in ~/.glaw/settings.json.\n")
+			fmt.Fprintf(os.Stderr, "Supported: OPENROUTER_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, XAI_API_KEY, or use ollama: prefix for local models.\n")
 			os.Exit(1)
 		}
 
@@ -159,7 +160,8 @@ func main() {
 	client, err := api.NewProviderClient(cfg.Model)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating API client: %v\n", err)
-		fmt.Fprintf(os.Stderr, "Set the appropriate API key environment variable (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, or XAI_API_KEY).\n")
+		fmt.Fprintf(os.Stderr, "Set the appropriate API key environment variable or configure it in ~/.glaw/settings.json.\n")
+		fmt.Fprintf(os.Stderr, "Supported: OPENROUTER_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, XAI_API_KEY, or use ollama: prefix for local models.\n")
 		os.Exit(1)
 	}
 

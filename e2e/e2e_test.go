@@ -222,7 +222,7 @@ func TestE2EAPIStreaming(t *testing.T) {
 // TestE2EAPIRequest tests building and serializing API requests.
 func TestE2EAPIRequest(t *testing.T) {
 	req := api.Request{
-		Model:     "claude-sonnet-4-6",
+		Model:     "openrouter:nvidia/nemotron-3-super-120b-a12b:free",
 		MaxTokens: 4096,
 		Stream:    true,
 		System:    "You are a helpful assistant.",
@@ -248,10 +248,10 @@ func TestE2EAPIRequest(t *testing.T) {
 
 	var parsed map[string]interface{}
 	if err := json.Unmarshal(data, &parsed); err != nil {
-			t.Fatalf("Unmarshal: %v", err)
-		}
+		t.Fatalf("Unmarshal: %v", err)
+	}
 
-	if parsed["model"] != "claude-sonnet-4-6" {
+	if parsed["model"] != "openrouter:nvidia/nemotron-3-super-120b-a12b:free" {
 		t.Errorf("model = %v", parsed["model"])
 	}
 	if parsed["stream"] != true {
@@ -320,6 +320,7 @@ func TestE2EProviderRouting(t *testing.T) {
 			wantErr: false,
 			setupEnv: func() {
 				t.Setenv("ANTHROPIC_API_KEY", "test-key")
+				t.Setenv("OPENROUTER_API_KEY", "")
 			},
 		},
 		{

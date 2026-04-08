@@ -30,17 +30,19 @@ type ToolFunc func(ctx context.Context, input json.RawMessage) (*runtime.ToolOut
 
 // Registry holds all registered tool definitions and their handlers.
 type Registry struct {
-	workspaceRoot string
-	orchestrator  *agent.SubAgentOrchestrator
-	handlers      map[string]ToolFunc
-	specs         []api.ToolDefinition
+	workspaceRoot         string
+	orchestrator          *agent.SubAgentOrchestrator
+	backgroundCmdManager  *BackgroundCommandManager
+	handlers              map[string]ToolFunc
+	specs                 []api.ToolDefinition
 }
 
 // NewRegistry creates a new tool registry with built-in tools.
 func NewRegistry(workspaceRoot string) *Registry {
 	r := &Registry{
-		workspaceRoot: workspaceRoot,
-		handlers:      make(map[string]ToolFunc),
+		workspaceRoot:        workspaceRoot,
+		backgroundCmdManager: NewBackgroundCommandManager(workspaceRoot),
+		handlers:             make(map[string]ToolFunc),
 	}
 	r.registerBuiltinTools()
 	return r
@@ -59,9 +61,19 @@ func (r *Registry) registerBuiltinTools() {
 	}{
 		{api.ToolDefinition{
 			Name:        "bash",
-			Description: "Execute a shell command",
-			InputSchema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"The bash command to execute"},"timeout":{"type":"integer","description":"Timeout in milliseconds","default":120000}},"required":["command"]}`),
+			Description: "Execute a shell command. Set run_in_background=true to run commands like 'npm run dev' in the background without blocking. When using run_in_background, a job_id is returned - use bash_result tool to fetch the output later.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"The bash command to execute"},"timeout":{"type":"integer","description":"Timeout in milliseconds (default: 120000 for foreground, 3600000 for background)"},"run_in_background":{"type":"boolean","description":"Whether to run the command in the background. Default: false. Set to true for long-running commands like dev servers."}},"required":["command"]}`),
 		}, r.bashTool},
+		{api.ToolDefinition{
+			Name:        "bash_result",
+			Description: "Fetch the output of a background bash command. If the command is still running, this will wait until it completes. Use this after bash with run_in_background=true to get the final output.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"job_id":{"type":"string","description":"The job ID returned by the bash tool with run_in_background=true"}},"required":["job_id"]}`),
+		}, r.bashResultTool},
+		{api.ToolDefinition{
+			Name:        "bash_stop",
+			Description: "Stop a running background bash command by its job ID.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"job_id":{"type":"string","description":"The job ID of the background command to stop"}},"required":["job_id"]}`),
+		}, r.bashStopTool},
 		{api.ToolDefinition{
 			Name:        "read_file",
 			Description: "Read file contents",
@@ -187,8 +199,9 @@ func (r *Registry) resolvePath(p string) (string, error) {
 
 func (r *Registry) bashTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
 	var args struct {
-		Command string `json:"command"`
-		Timeout int    `json:"timeout"`
+		Command         string `json:"command"`
+		Timeout         int    `json:"timeout"`
+		RunInBackground bool   `json:"run_in_background"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
@@ -199,16 +212,46 @@ func (r *Registry) bashTool(ctx context.Context, input json.RawMessage) (*runtim
 
 	timeout := time.Duration(args.Timeout) * time.Millisecond
 	if timeout == 0 {
-		timeout = 120 * time.Second
+		if args.RunInBackground {
+			timeout = 60 * time.Minute // Longer timeout for background commands
+		} else {
+			timeout = 120 * time.Second
+		}
 	}
 
+	// If running in background, spawn and return immediately
+	if args.RunInBackground {
+		// For interactive commands, we can't run them in background
+		// since they need terminal access
+		if isInteractiveCommand(args.Command) {
+			return &runtime.ToolOutput{
+				Content: "Cannot run interactive commands in background. Interactive commands need terminal access. Remove run_in_background=true for this command.",
+				IsError: true,
+			}, nil
+		}
+
+		jobID, err := r.backgroundCmdManager.Spawn(args.Command, timeout, r.workspaceRoot)
+		if err != nil {
+			return &runtime.ToolOutput{
+				Content: fmt.Sprintf("Failed to start background command: %v", err),
+				IsError: true,
+			}, nil
+		}
+
+		return &runtime.ToolOutput{
+			Content: fmt.Sprintf("Command %q started in background (job ID: %s). The command is now running. You can do other work and call bash_result with job_id=%q when you need the output. Use bash_stop to stop the command.", args.Command, jobID, jobID),
+			IsError: false,
+		}, nil
+	}
+
+	// Foreground execution (blocking)
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", args.Command)
 	cmd.Dir = r.workspaceRoot
 
-	// Check if the command likely needs interactive terminal access
+	// Check if command likely needs interactive terminal access
 	// (password prompts, sudo, etc.) — these need direct terminal I/O.
 	// For most commands, capture output as before.
 	needsTerminal := isInteractiveCommand(args.Command)
@@ -266,6 +309,111 @@ func (r *Registry) bashTool(ctx context.Context, input json.RawMessage) (*runtim
 	}
 
 	return &runtime.ToolOutput{Content: output, IsError: false}, nil
+}
+
+func (r *Registry) bashResultTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
+	var args struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
+	}
+	if args.JobID == "" {
+		return &runtime.ToolOutput{Content: "job_id is required", IsError: true}, nil
+	}
+
+	// Check if already in a terminal state first
+	cmd, err := r.backgroundCmdManager.Get(args.JobID)
+	if err != nil {
+		return &runtime.ToolOutput{Content: fmt.Sprintf("Job %q not found.", args.JobID), IsError: true}, nil
+	}
+
+	switch cmd.Status {
+	case StatusCancelled:
+		return &runtime.ToolOutput{
+			Content: fmt.Sprintf("Job %s was cancelled.", args.JobID),
+			IsError: false,
+		}, nil
+	case StatusFailed:
+		errMsg := "unknown error"
+		if cmd.Error != nil {
+			errMsg = cmd.Error.Error()
+		}
+		return &runtime.ToolOutput{
+			Content: fmt.Sprintf("Job %s failed: %s\nOutput: %s", args.JobID, errMsg, cmd.Output),
+			IsError: true,
+		}, nil
+	case StatusCompleted:
+		return &runtime.ToolOutput{
+			Content: cmd.Output,
+			IsError: false,
+		}, nil
+	}
+
+	// Still running/pending — block until the job finishes.
+	// This prevents the LLM from entering a polling loop.
+	result, err := r.backgroundCmdManager.Wait(args.JobID, 5*time.Minute)
+	if err != nil {
+		return &runtime.ToolOutput{Content: fmt.Sprintf("Failed to wait for job %s: %v", args.JobID, err), IsError: true}, nil
+	}
+
+	output := result.GetOutput()
+	if result.Error != nil {
+		output = fmt.Sprintf("Command error: %v\n%s", result.Error, output)
+	}
+
+	return &runtime.ToolOutput{
+		Content: output,
+		IsError: result.Error != nil,
+	}, nil
+}
+
+func (r *Registry) bashStopTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
+	var args struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
+	}
+	if args.JobID == "" {
+		return &runtime.ToolOutput{Content: "job_id is required", IsError: true}, nil
+	}
+
+	cmd, err := r.backgroundCmdManager.Get(args.JobID)
+	if err != nil {
+		return &runtime.ToolOutput{Content: fmt.Sprintf("Job %q not found.", args.JobID), IsError: true}, nil
+	}
+
+	// If already done, return current state
+	if cmd.IsDone() {
+		output := cmd.GetOutput()
+		if cmd.Status == StatusCompleted {
+			return &runtime.ToolOutput{
+				Content: fmt.Sprintf("Job %s already completed.\nOutput: %s", args.JobID, output),
+				IsError: false,
+			}, nil
+		}
+		errMsg := "unknown error"
+		if cmd.Error != nil {
+			errMsg = cmd.Error.Error()
+		}
+		return &runtime.ToolOutput{
+			Content: fmt.Sprintf("Job %s already %s. Error: %s\nOutput: %s", args.JobID, cmd.Status, errMsg, output),
+			IsError: false,
+		}, nil
+	}
+
+	if err := r.backgroundCmdManager.Stop(args.JobID); err != nil {
+		return &runtime.ToolOutput{
+			Content: fmt.Sprintf("Failed to stop job %s: %v", args.JobID, err),
+			IsError: true,
+		}, nil
+	}
+
+	return &runtime.ToolOutput{
+		Content: fmt.Sprintf("Job %s has been stopped.", args.JobID),
+		IsError: false,
+	}, nil
 }
 
 // isInteractiveCommand checks if a bash command likely needs terminal interaction.

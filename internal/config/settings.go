@@ -59,7 +59,7 @@ type Settings struct {
 func DefaultSettings() Settings {
 	t := 1.0
 	return Settings{
-		Model: "claude-sonnet-4-6",
+		Model: "openrouter:nvidia/nemotron-3-super-120b-a12b:free",
 		Permissions: PermissionSettings{
 			Mode: "workspace_write",
 		},
@@ -229,6 +229,15 @@ func LoadAll(workspaceRoot string) (Settings, error) {
 
 // deriveFromEnv fills in API config from environment variables set by the env block.
 func (s *Settings) deriveFromEnv() {
+	// Override default model if user has a provider-specific env var set
+	// (only when model is still the built-in default).
+	// This must run before API key derivation so the correct provider is used.
+	if s.Model == "" || s.Model == "openrouter:nvidia/nemotron-3-super-120b-a12b:free" {
+		if v := os.Getenv("ANTHROPIC_DEFAULT_SONNET_MODEL"); v != "" {
+			s.Model = v
+		}
+	}
+
 	if s.APIKey == "" {
 		switch {
 		case strings.HasPrefix(s.Model, "gpt-") || strings.HasPrefix(s.Model, "o3") || strings.HasPrefix(s.Model, "o4-"):
@@ -247,6 +256,10 @@ func (s *Settings) deriveFromEnv() {
 			}
 		case strings.HasPrefix(s.Model, "ollama:"):
 			// No key needed for Ollama
+		case strings.HasPrefix(s.Model, "openrouter:"):
+			if v := os.Getenv("OPENROUTER_API_KEY"); v != "" {
+				s.APIKey = v
+			}
 		default:
 			if v := os.Getenv("ANTHROPIC_AUTH_TOKEN"); v != "" {
 				s.APIKey = v
@@ -270,16 +283,14 @@ func (s *Settings) deriveFromEnv() {
 			if v := os.Getenv("OLLAMA_BASE_URL"); v != "" {
 				s.APIBaseURL = v
 			}
+		case strings.HasPrefix(s.Model, "openrouter:"):
+			if v := os.Getenv("OPENROUTER_BASE_URL"); v != "" {
+				s.APIBaseURL = v
+			}
 		default:
 			if v := os.Getenv("ANTHROPIC_BASE_URL"); v != "" {
 				s.APIBaseURL = v
 			}
-		}
-	}
-
-	if s.Model == "" || s.Model == "claude-sonnet-4-6" {
-		if v := os.Getenv("ANTHROPIC_DEFAULT_SONNET_MODEL"); v != "" {
-			s.Model = v
 		}
 	}
 }

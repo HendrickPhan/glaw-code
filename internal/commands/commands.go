@@ -572,7 +572,7 @@ func (d *Dispatcher) handleInit() (*Result, error) {
 	}
 
 	// Create default settings.json
-	settings := []byte(`{"permissions": {"mode": "workspace_write"}, "model": "claude-sonnet-4-6"}`)
+	settings := []byte(`{"permissions": {"mode": "workspace_write"}, "model": "openrouter:nvidia/nemotron-3-super-120b-a12b:free"}`)
 	if err := os.WriteFile(".glaw/settings.json", settings, 0o644); err != nil {
 		return &Result{Action: "continue", Message: "Failed to write settings: " + err.Error()}, nil
 	}

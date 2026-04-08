@@ -79,9 +79,9 @@ get_latest_version() {
   local api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
 
   RELEASE_VERSION=""
-  RELEASE_VERSION=$(curl -fsSL "$api_url" 2>/dev/null \
-    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
-    | head -1 || true)
+  RELEASE_VERSION=$(curl -fsSL "$api_url" 2>/dev/null |
+    sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' |
+    head -1 || true)
 
   if [ -z "${RELEASE_VERSION:-}" ]; then
     warn "No GitHub release found. Will try local prebuild/ directory."
@@ -223,10 +223,55 @@ install_glaw() {
     echo "  ${BINARY_NAME} serve        # Start web UI on :8080"
     echo "  ${BINARY_NAME} \"fix the bug\" # One-shot mode"
     echo ""
-    echo -e "Set ${CYAN}ANTHROPIC_API_KEY${RESET} or ${CYAN}XAI_API_KEY${RESET} to enable AI features."
+    echo -e "Configure your API key in ${CYAN}~/.glaw/settings.json${RESET} to get started."
+    echo -e "Supported providers: OpenRouter (free models available), Anthropic, OpenAI, Gemini, xAI, Ollama"
   else
     warn "Binary installed but not found in PATH. You may need to restart your shell."
   fi
+}
+
+# -------------------------------------------------------
+# Create sample settings.json if it doesn't exist
+# -------------------------------------------------------
+create_sample_settings() {
+  local glaw_dir="${HOME}/.glaw"
+  local settings_path="${glaw_dir}/settings.json"
+
+  if [ -f "$settings_path" ]; then
+    ok "Found existing settings at ${settings_path} — skipping sample creation."
+    return
+  fi
+
+  mkdir -p "$glaw_dir"
+
+  cat >"$settings_path" <<'SETTINGS_EOF'
+{
+  "model": "openrouter:nvidia/nemotron-3-super-120b-a12b:free",
+  "permissions": {
+    "mode": "workspace_write"
+  },
+  "env": {
+    "OPENROUTER_API_KEY": "YOUR_OPENROUTER_API_KEY_HERE"
+  }
+}
+SETTINGS_EOF
+
+  ok "Created sample settings at ${settings_path}"
+  echo ""
+  echo -e "  ${YELLOW}⚠${RESET}  Edit ${CYAN}${settings_path}${RESET} to set your API key."
+  echo -e "     Replace ${YELLOW}YOUR_OPENROUTER_API_KEY_HERE${RESET} with your actual key."
+  echo ""
+  echo -e "  Get a free OpenRouter API key at: ${CYAN}https://openrouter.ai/keys${RESET}"
+  echo -e "  The default model (nvidia/nemotron-3-super-120b-a12b) is ${GREEN}free${RESET} on OpenRouter."
+  echo ""
+  echo -e "  You can also use other providers by changing the model and env vars:"
+  echo -e "    ${CYAN}Anthropic:${RESET}     model: \"claude-sonnet-4-6\",       env: ANTHROPIC_API_KEY"
+  echo -e "    ${CYAN}OpenAI:${RESET}        model: \"gpt-4o\",                  env: OPENAI_API_KEY"
+  echo -e "    ${CYAN}Gemini:${RESET}        model: \"gemini-2.5-pro\",           env: GEMINI_API_KEY"
+  echo -e "    ${CYAN}xAI:${RESET}           model: \"grok-3\",                   env: XAI_API_KEY"
+  echo -e "    ${CYAN}Ollama:${RESET}        model: \"ollama:llama3\",            env: (no key needed, local)"
+  echo -e "    ${CYAN}OpenRouter:${RESET}    model: \"openrouter:<model-id>\",    env: OPENROUTER_API_KEY"
+  echo ""
 }
 
 # -------------------------------------------------------
@@ -248,16 +293,17 @@ main() {
 
   # Parse flags
   case "${1:-}" in
-    --local|-l)
-      FORCE_LOCAL=1
-      info "Forcing local prebuild/ directory"
-      ;;
+  --local | -l)
+    FORCE_LOCAL=1
+    info "Forcing local prebuild/ directory"
+    ;;
   esac
 
   detect_platform
   get_latest_version
   download_binary
   install_glaw
+  create_sample_settings
 
   echo ""
   ok "Done!"

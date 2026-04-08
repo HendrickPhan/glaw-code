@@ -48,7 +48,8 @@ func TestE2EToolRegistrySpecs(t *testing.T) {
 
 
 	wantNames := map[string]bool{
-		"bash": false, "read_file": false, "write_file": false, "edit_file": false,
+		"bash": false, "bash_result": false, "bash_stop": false,
+		"read_file": false, "write_file": false, "edit_file": false,
 		"glob_search": false, "grep_search": false, "web_fetch": false,
 		"web_search": false, "todo_write": false, "tool_search": false,
 		"notebook_edit": false, "sleep": false, "send_user_message": false,

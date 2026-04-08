@@ -566,15 +566,15 @@ func TestAnalyzeDetectsMultipleLanguages(t *testing.T) {
 func TestGetToolSpecs(t *testing.T) {
 	r := NewRegistry(t.TempDir())
 	specs := r.GetToolSpecs()
-	if len(specs) != 17 {
-		t.Errorf("expected 17 tool specs, got %d", len(specs))
+	if len(specs) != 19 {
+		t.Errorf("expected 19 tool specs, got %d", len(specs))
 	}
 
 	names := make(map[string]bool)
 	for _, s := range specs {
 		names[s.Name] = true
 	}
-	for _, name := range []string{"bash", "read_file", "write_file", "edit_file", "glob_search", "grep_search", "web_fetch", "web_search", "todo_write", "tool_search", "notebook_edit", "sleep", "send_user_message", "config", "analyze", "sub_agent", "sub_agent_result"} {
+	for _, name := range []string{"bash", "bash_result", "bash_stop", "read_file", "write_file", "edit_file", "glob_search", "grep_search", "web_fetch", "web_search", "todo_write", "tool_search", "notebook_edit", "sleep", "send_user_message", "config", "analyze", "sub_agent", "sub_agent_result"} {
 		if !names[name] {
 			t.Errorf("missing tool spec: %s", name)
 		}

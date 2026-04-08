@@ -311,7 +311,7 @@ func TestPricingForModel(t *testing.T) {
 
 func TestDefaultConfig(t *testing.T) {
 	c := DefaultConfig()
-	if c.Model != "claude-sonnet-4-6" {
+	if c.Model != "openrouter:nvidia/nemotron-3-super-120b-a12b:free" {
 		t.Errorf("Model = %q", c.Model)
 	}
 	if c.MaxTokens != 16384 {
@@ -410,7 +410,7 @@ func TestNewConversationRuntime(t *testing.T) {
 
 func TestRuntimeGetSetModel(t *testing.T) {
 	rt := NewConversationRuntime(nil, DefaultConfig(), NewSession(), NewPermissionManager(PermReadOnly, "/tmp"), nil)
-	if rt.GetModel() != "claude-sonnet-4-6" {
+	if rt.GetModel() != "openrouter:nvidia/nemotron-3-super-120b-a12b:free" {
 		t.Errorf("Model = %q", rt.GetModel())
 	}
 	rt.SetModel("claude-opus-4-6")

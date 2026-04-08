@@ -30,14 +30,14 @@ type mockRuntimeFS struct {
 
 func newMockRuntimeFS(dir string) *mockRuntimeFS {
 	return &mockRuntimeFS{
-		model:        "claude-sonnet-4-6",
+		model:        "openrouter:nvidia/nemotron-3-super-120b-a12b:free",
 		permMode:     "workspace_write",
 		sessionID:    "sess_test",
 		msgCount:     5,
 		usage:        commands.UsageInfo{InputTokens: 100, OutputTokens: 50, TotalCostUSD: 0.05},
 		workspaceDir: dir,
 		gitOutput:    "fake diff output",
-		configMap:    map[string]interface{}{"model": "claude-sonnet-4-6"},
+		configMap:    map[string]interface{}{"model": "openrouter:nvidia/nemotron-3-super-120b-a12b:free"},
 	}
 }
 
@@ -126,7 +126,7 @@ func TestE2ECmdStatusShowsAllFields(t *testing.T) {
 	d := commands.NewDispatcher(newMockRuntimeFS(t.TempDir()))
 	result := handleCmd(t, d, "/status")
 
-	checks := []string{"claude-sonnet-4-6", "sess_test", "5", "workspace_write"}
+	checks := []string{"openrouter:nvidia/nemotron-3-super-120b-a12b:free", "sess_test", "5", "workspace_write"}
 	for _, want := range checks {
 		if !strings.Contains(result.Message, want) {
 			t.Errorf("status missing %q: %q", want, result.Message)
@@ -279,7 +279,7 @@ func TestE2ECmdInitCreatesDirectory(t *testing.T) {
 	if err := json.Unmarshal(data, &settings); err != nil {
 		t.Fatalf("invalid settings.json: %v", err)
 	}
-	if settings["model"] != "claude-sonnet-4-6" {
+	if settings["model"] != "openrouter:nvidia/nemotron-3-super-120b-a12b:free" {
 		t.Errorf("model = %v", settings["model"])
 	}
 }
@@ -423,7 +423,7 @@ func TestE2ECmdExportCreatesFile(t *testing.T) {
 	if export["session_id"] != "sess_test" {
 		t.Errorf("session_id = %v", export["session_id"])
 	}
-	if export["model"] != "claude-sonnet-4-6" {
+	if export["model"] != "openrouter:nvidia/nemotron-3-super-120b-a12b:free" {
 		t.Errorf("model = %v", export["model"])
 	}
 	if _, ok := export["exported_at"]; !ok {
