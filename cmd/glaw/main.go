@@ -90,6 +90,7 @@ func main() {
 			Addr:           *serveAddr,
 			Open:           *serveOpen,
 			RuntimeFactory: runtimeFactory,
+			WorkspaceRoot:  workspaceRoot,
 		}
 		if err := web.Serve(opts); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)

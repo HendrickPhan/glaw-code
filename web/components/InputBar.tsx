@@ -1,20 +1,9 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-
-const COMMANDS = [
-  { cmd: "/help", desc: "Show available commands" },
-  { cmd: "/clear", desc: "Clear conversation" },
-  { cmd: "/model", desc: "Show or change model" },
-  { cmd: "/cost", desc: "Show cost summary" },
-  { cmd: "/revert", desc: "Revert last changes" },
-  { cmd: "/revert all", desc: "Revert all changes" },
-  { cmd: "/status", desc: "Show runtime status" },
-  { cmd: "/compact", desc: "Compact conversation history" },
-  { cmd: "/diff", desc: "Show pending changes" },
-  { cmd: "/session list", desc: "List sessions" },
-  { cmd: "/quit", desc: "Exit" },
-];
+import { useCommands } from "@/hooks/useCommands";
+import CommandPalette from "@/components/CommandPalette";
+import { Send } from "lucide-react";
 
 export default function InputBar({
   onSend,
@@ -26,124 +15,129 @@ export default function InputBar({
   disabled?: boolean;
 }) {
   const [input, setInput] = useState("");
-  const [showCommands, setShowCommands] = useState(false);
-  const [filter, setFilter] = useState("");
   const textarea = useRef<HTMLTextAreaElement>(null);
-  const cmdRef = useRef<HTMLDivElement>(null);
 
+  const {
+    isOpen,
+    filteredCommands,
+    selectedIndex,
+    handleInputChange,
+    handleKeyDown,
+    selectCommand,
+    closePalette,
+    registerClearCallback,
+    inputRef,
+  } = useCommands(onCommand);
+
+  // Register a callback that properly clears React state
   useEffect(() => {
+    registerClearCallback(() => {
+      setInput("");
+    });
+  }, [registerClearCallback]);
+
+  // Auto-resize textarea
+  useEffect(() => {
+    if (textarea.current && inputRef.current) {
+      textarea.current = inputRef.current;
+    }
     if (textarea.current) {
       textarea.current.style.height = "auto";
       textarea.current.style.height =
         Math.min(textarea.current.scrollHeight, 160) + "px";
     }
-  }, [input]);
-
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (cmdRef.current && !cmdRef.current.contains(e.target as Node)) {
-        setShowCommands(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, []);
-
-  const filtered = COMMANDS.filter((c) =>
-    c.cmd.startsWith(filter)
-  );
+  }, [input, inputRef]);
 
   const handleSubmit = () => {
     const text = input.trim();
     if (!text) return;
 
     if (text.startsWith("/")) {
-      onCommand(text);
+      const fullCommand = text.startsWith("/") ? text : "/" + text;
+      onCommand(fullCommand);
     } else {
       onSend(text);
     }
     setInput("");
-    setShowCommands(false);
+    closePalette();
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value;
+    setInput(value);
+    handleInputChange(value);
+  };
+
+  const combinedKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Let useCommands handle keyboard shortcuts when palette is open
+    if (isOpen) {
+      handleKeyDown(e);
+      return;
+    }
+
+    // Default Enter behavior
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSubmit();
-    }
-    if (e.key === "Escape") {
-      setShowCommands(false);
-    }
-  };
-
-  const handleChange = (val: string) => {
-    setInput(val);
-    if (val.startsWith("/")) {
-      setFilter(val);
-      setShowCommands(true);
-    } else {
-      setShowCommands(false);
     }
   };
 
   return (
     <div className="border-t border-zinc-800 bg-zinc-950 px-4 py-3">
-      <div className="max-w-3xl mx-auto relative" ref={cmdRef}>
+      <div className="max-w-3xl mx-auto relative">
         {/* Command palette */}
-        {showCommands && filtered.length > 0 && (
-          <div className="absolute bottom-full mb-2 left-0 right-0 bg-zinc-900 border border-zinc-700 rounded-xl shadow-xl overflow-hidden z-10">
-            {filtered.map((c) => (
-              <button
-                key={c.cmd}
-                onClick={() => {
-                  onCommand(c.cmd);
-                  setInput("");
-                  setShowCommands(false);
-                }}
-                className="w-full text-left px-4 py-2 hover:bg-zinc-800 flex items-center gap-3 transition-colors"
-              >
-                <span className="text-emerald-400 font-mono text-sm">
-                  {c.cmd}
-                </span>
-                <span className="text-zinc-500 text-sm">{c.desc}</span>
-              </button>
-            ))}
-          </div>
-        )}
+        <CommandPalette
+          isOpen={isOpen}
+          commands={filteredCommands}
+          selectedIndex={selectedIndex}
+          onSelect={selectCommand}
+          onClose={closePalette}
+        />
 
         <div className="flex items-end gap-2">
           <textarea
-            ref={textarea}
+            ref={inputRef}
             value={input}
-            onChange={(e) => handleChange(e.target.value)}
-            onKeyDown={handleKeyDown}
+            onChange={handleChange}
+            onKeyDown={combinedKeyDown}
             placeholder={
-              disabled ? "Running..." : "Message glaw... (/ for commands)"
+              disabled ? "Running..." : "Message glaw... (Type / for commands)"
             }
             disabled={disabled}
             rows={1}
-            className="flex-1 bg-zinc-900 border border-zinc-700 rounded-xl px-4 py-2.5 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500 resize-none disabled:opacity-50 transition-colors"
+            className="flex-1 bg-zinc-900 border border-zinc-700 rounded-xl px-4 py-2.5 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-emerald-600 resize-none disabled:opacity-50 transition-colors"
           />
           <button
             onClick={handleSubmit}
             disabled={disabled || !input.trim()}
             className="shrink-0 bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-700 disabled:opacity-50 text-white rounded-lg p-2.5 transition-colors"
+            title="Send message"
           >
-            <svg
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <line x1="22" y1="2" x2="11" y2="13" />
-              <polygon points="22 2 15 22 11 13 2 9 22 2" />
-            </svg>
+            <Send className="w-5 h-5" />
           </button>
         </div>
+
+        {/* Command hint */}
+        {isOpen && filteredCommands.length > 0 && (
+          <div className="mt-2 text-xs text-zinc-600 flex items-center gap-3">
+            <span className="flex items-center gap-1">
+              <kbd className="px-1.5 py-0.5 bg-zinc-800 rounded text-zinc-400">↑↓</kbd>
+              Navigate
+            </span>
+            <span className="flex items-center gap-1">
+              <kbd className="px-1.5 py-0.5 bg-zinc-800 rounded text-zinc-400">Tab</kbd>
+              Autocomplete
+            </span>
+            <span className="flex items-center gap-1">
+              <kbd className="px-1.5 py-0.5 bg-zinc-800 rounded text-zinc-400">Enter</kbd>
+              Select
+            </span>
+            <span className="flex items-center gap-1">
+              <kbd className="px-1.5 py-0.5 bg-zinc-800 rounded text-zinc-400">Esc</kbd>
+              Close
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );

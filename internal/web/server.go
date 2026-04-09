@@ -21,20 +21,25 @@ type WebServer struct {
 	store          *WebSessionStore
 	runtimeFactory RuntimeFactory
 	staticFS       fs.FS
+	workspaceRoot  string
 }
 
 // NewWebServer creates a new web server.
-func NewWebServer(rf RuntimeFactory) *WebServer {
+func NewWebServer(rf RuntimeFactory, workspaceRoot string) *WebServer {
 	// Strip the "static/" prefix from the embedded FS so that
 	// requests for "/_next/..." map to "static/_next/..." correctly.
 	sub, err := fs.Sub(webUI, "static")
 	if err != nil {
 		panic("failed to create sub FS: " + err.Error())
 	}
+	store := NewWebSessionStore()
+	store.SetWorkspaceRoot(workspaceRoot)
+
 	return &WebServer{
-		store:          NewWebSessionStore(),
+		store:          store,
 		runtimeFactory: rf,
 		staticFS:       sub,
+		workspaceRoot:  workspaceRoot,
 	}
 }
 
@@ -80,7 +85,7 @@ func (s *WebServer) handleAPISessions(w http.ResponseWriter, r *http.Request) {
 		id := s.store.CreateSession()
 		writeJSON(w, http.StatusCreated, map[string]string{"session_id": id})
 	case http.MethodGet:
-		sessions := s.store.ListSessions()
+		sessions := s.store.ListSessions(s.workspaceRoot)
 		writeJSON(w, http.StatusOK, map[string]interface{}{"sessions": sessions})
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})

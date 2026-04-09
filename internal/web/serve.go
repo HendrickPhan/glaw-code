@@ -13,11 +13,12 @@ type ServeOpts struct {
 	Addr           string
 	Open           bool
 	RuntimeFactory RuntimeFactory
+	WorkspaceRoot  string
 }
 
 // Serve starts the web server and optionally opens a browser.
 func Serve(opts ServeOpts) error {
-	srv := NewWebServer(opts.RuntimeFactory)
+	srv := NewWebServer(opts.RuntimeFactory, opts.WorkspaceRoot)
 
 	log.Printf("glaw-code web server starting on %s", opts.Addr)
 	fmt.Printf("glaw-code web interface: http://localhost%s\n", opts.Addr)

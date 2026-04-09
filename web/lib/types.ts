@@ -11,6 +11,8 @@ export interface ChatMessage {
   timestamp: number;
   toolUse?: ToolUseInfo;
   toolResult?: ToolResultInfo;
+  isCommand?: boolean;
+  command?: string;
 }
 
 export interface ToolUseInfo {

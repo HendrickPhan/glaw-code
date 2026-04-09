@@ -124,6 +124,32 @@ func (c *AnthropicClient) SendMessage(ctx context.Context, req Request) (*Respon
 // StreamMessage sends a streaming request and returns an event channel.
 func (c *AnthropicClient) StreamMessage(ctx context.Context, req Request) (<-chan StreamEvent, error) {
 	req.Stream = true
+	var lastErr error
+
+	for attempt := 0; attempt <= c.config.MaxRetries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoffDuration(attempt)):
+			}
+		}
+
+		ch, err := c.doStreamMessage(ctx, req)
+		if err != nil {
+			lastErr = err
+			if apiErr, ok := err.(*Error); ok && !apiErr.IsRetryable() {
+				return nil, err
+			}
+			continue
+		}
+		return ch, nil
+	}
+
+	return nil, NewRetriesExhaustedError(c.config.MaxRetries+1, lastErr)
+}
+
+func (c *AnthropicClient) doStreamMessage(ctx context.Context, req Request) (<-chan StreamEvent, error) {
 	ch := make(chan StreamEvent, 64)
 
 	body, err := json.Marshal(req)
@@ -149,6 +175,14 @@ func (c *AnthropicClient) StreamMessage(ctx context.Context, req Request) (<-cha
 		apiErr := NewHTTPError(httpResp.StatusCode, string(respBody))
 		if httpResp.StatusCode == 429 || httpResp.StatusCode == 503 {
 			apiErr.Type = ErrRateLimit
+		}
+		// Check for network error in status 400 and 408 responses
+		if (httpResp.StatusCode == 400 || httpResp.StatusCode == 408) && isNetworkErrorMessage(string(respBody)) {
+			apiErr.Type = ErrServerError
+		}
+		// Also treat 408 (timeout) as server error
+		if httpResp.StatusCode == 408 {
+			apiErr.Type = ErrServerError
 		}
 		return nil, apiErr
 	}
@@ -190,6 +224,14 @@ func (c *AnthropicClient) doRequest(ctx context.Context, req Request) (*Response
 		apiErr := NewHTTPError(httpResp.StatusCode, string(respBody))
 		if httpResp.StatusCode == 429 || httpResp.StatusCode == 503 {
 			apiErr.Type = ErrRateLimit
+		}
+		// Check for network error in status 400 and 408 responses
+		if (httpResp.StatusCode == 400 || httpResp.StatusCode == 408) && isNetworkErrorMessage(string(respBody)) {
+			apiErr.Type = ErrServerError
+		}
+		// Also treat 408 (timeout) as server error
+		if httpResp.StatusCode == 408 {
+			apiErr.Type = ErrServerError
 		}
 		return nil, apiErr
 	}
@@ -325,6 +367,39 @@ func NewOpenAICompatClient(config ClientConfig) *OpenAICompatClient {
 
 // SendMessage sends a request to the OpenAI-compatible API.
 func (c *OpenAICompatClient) SendMessage(ctx context.Context, req Request) (*Response, error) {
+	var lastErr error
+	maxRetries := c.config.MaxRetries
+	if maxRetries == 0 {
+		maxRetries = 2
+	}
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			// Wait before retrying
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoffDuration(attempt)):
+			}
+		}
+
+		resp, err := c.doSendMessage(ctx, req)
+		if err != nil {
+			lastErr = err
+			// Check if error is retryable
+			if apiErr, ok := err.(*Error); ok && !apiErr.IsRetryable() {
+				return nil, err
+			}
+			// For non-api errors (network issues), retry
+			continue
+		}
+		return resp, nil
+	}
+
+	return nil, NewRetriesExhaustedError(maxRetries+1, lastErr)
+}
+
+func (c *OpenAICompatClient) doSendMessage(ctx context.Context, req Request) (*Response, error) {
 	oaiReq := c.convertRequest(req)
 	body, err := json.Marshal(oaiReq)
 	if err != nil {
@@ -338,7 +413,7 @@ func (c *OpenAICompatClient) SendMessage(ctx context.Context, req Request) (*Res
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("http request failed: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+c.config.APIKey)
@@ -355,7 +430,12 @@ func (c *OpenAICompatClient) SendMessage(ctx context.Context, req Request) (*Res
 	}
 
 	if httpResp.StatusCode != http.StatusOK {
-		return nil, NewHTTPError(httpResp.StatusCode, string(respBody))
+		apiErr := NewHTTPError(httpResp.StatusCode, string(respBody))
+		// Check for network error in status 400 responses
+		if httpResp.StatusCode == 400 && isNetworkErrorMessage(string(respBody)) {
+			apiErr.Type = ErrServerError
+		}
+		return nil, apiErr
 	}
 
 	return c.convertResponse(respBody)
@@ -363,6 +443,39 @@ func (c *OpenAICompatClient) SendMessage(ctx context.Context, req Request) (*Res
 
 // StreamMessage sends a streaming request to the OpenAI-compatible API.
 func (c *OpenAICompatClient) StreamMessage(ctx context.Context, req Request) (<-chan StreamEvent, error) {
+	var lastErr error
+	maxRetries := c.config.MaxRetries
+	if maxRetries == 0 {
+		maxRetries = 2
+	}
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			// Wait before retrying
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoffDuration(attempt)):
+			}
+		}
+
+		ch, err := c.doStreamMessage(ctx, req)
+		if err != nil {
+			lastErr = err
+			// Check if error is retryable
+			if apiErr, ok := err.(*Error); ok && !apiErr.IsRetryable() {
+				return nil, err
+			}
+			// For non-api errors (network issues), retry
+			continue
+		}
+		return ch, nil
+	}
+
+	return nil, NewRetriesExhaustedError(maxRetries+1, lastErr)
+}
+
+func (c *OpenAICompatClient) doStreamMessage(ctx context.Context, req Request) (<-chan StreamEvent, error) {
 	oaiReq := c.convertRequest(req)
 	oaiReq.Stream = true
 
@@ -391,7 +504,16 @@ func (c *OpenAICompatClient) StreamMessage(ctx context.Context, req Request) (<-
 	if httpResp.StatusCode != http.StatusOK {
 		defer httpResp.Body.Close()
 		respBody, _ := io.ReadAll(httpResp.Body)
-		return nil, NewHTTPError(httpResp.StatusCode, string(respBody))
+		apiErr := NewHTTPError(httpResp.StatusCode, string(respBody))
+		// Check for network error in status 400 and 408 responses
+		if (httpResp.StatusCode == 400 || httpResp.StatusCode == 408) && isNetworkErrorMessage(string(respBody)) {
+			apiErr.Type = ErrServerError
+		}
+		// Also treat 408 (timeout) as server error
+		if httpResp.StatusCode == 408 {
+			apiErr.Type = ErrServerError
+		}
+		return nil, apiErr
 	}
 
 	ch := make(chan StreamEvent, 64)
