@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { ChatMessage } from "@/lib/types";
 import MessageBubble from "./MessageBubble";
 import ToolCall from "./ToolCall";
+import CommandResult from "./CommandResult";
 
 export default function ChatPanel({
   messages,
@@ -29,7 +30,7 @@ export default function ChatPanel({
             </h2>
             <p className="text-zinc-500 text-sm leading-relaxed">
               Your AI coding assistant. Ask me to create files, edit code, run
-              commands, search your codebase, or anything else.
+              commands, search your codebase, or use <span className="text-emerald-400 font-mono">/</span> for commands.
             </p>
             <div className="flex flex-wrap justify-center gap-2 pt-2">
               {[
@@ -46,17 +47,38 @@ export default function ChatPanel({
                 </div>
               ))}
             </div>
+            <div className="pt-4 border-t border-zinc-800 mt-4">
+              <p className="text-xs text-zinc-600 mb-2">Quick commands:</p>
+              <div className="flex flex-wrap justify-center gap-2">
+                {["/help", "/status", "/analyze", "/agents"].map((cmd) => (
+                  <div
+                    key={cmd}
+                    className="text-xs text-emerald-600 bg-emerald-950/50 border border-emerald-900/50 rounded-lg px-3 py-1 font-mono"
+                  >
+                    {cmd}
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       ) : (
         <div className="divide-y divide-zinc-800/30">
-          {messages.map((msg) =>
-            msg.role === "tool" ? (
-              <ToolCall key={msg.id} message={msg} />
-            ) : (
-              <MessageBubble key={msg.id} message={msg} />
-            )
-          )}
+          {messages.map((msg) => {
+            if (msg.role === "tool") {
+              return <ToolCall key={msg.id} message={msg} />;
+            }
+            if (msg.isCommand) {
+              return (
+                <CommandResult
+                  key={msg.id}
+                  command={msg.command || "unknown"}
+                  message={msg.content}
+                />
+              );
+            }
+            return <MessageBubble key={msg.id} message={msg} />;
+          })}
         </div>
       )}
 

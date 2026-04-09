@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"os"
+	"strings"
 
 	"github.com/hieu-glaw/glaw-code/internal/runtime"
 )
@@ -21,20 +23,25 @@ type WebServer struct {
 	store          *WebSessionStore
 	runtimeFactory RuntimeFactory
 	staticFS       fs.FS
+	workspaceRoot  string
 }
 
 // NewWebServer creates a new web server.
-func NewWebServer(rf RuntimeFactory) *WebServer {
+func NewWebServer(rf RuntimeFactory, workspaceRoot string) *WebServer {
 	// Strip the "static/" prefix from the embedded FS so that
 	// requests for "/_next/..." map to "static/_next/..." correctly.
 	sub, err := fs.Sub(webUI, "static")
 	if err != nil {
 		panic("failed to create sub FS: " + err.Error())
 	}
+	store := NewWebSessionStore()
+	store.SetWorkspaceRoot(workspaceRoot)
+
 	return &WebServer{
-		store:          NewWebSessionStore(),
+		store:          store,
 		runtimeFactory: rf,
 		staticFS:       sub,
+		workspaceRoot:  workspaceRoot,
 	}
 }
 
@@ -80,11 +87,52 @@ func (s *WebServer) handleAPISessions(w http.ResponseWriter, r *http.Request) {
 		id := s.store.CreateSession()
 		writeJSON(w, http.StatusCreated, map[string]string{"session_id": id})
 	case http.MethodGet:
-		sessions := s.store.ListSessions()
+		sessions := s.store.ListSessions(s.workspaceRoot)
 		writeJSON(w, http.StatusOK, map[string]interface{}{"sessions": sessions})
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
+}
+
+// listFilesystemSessions lists sessions from .glaw/sessions directory.
+func listFilesystemSessions(workspaceRoot string) ([]map[string]interface{}, error) {
+	sessionsDir := workspaceRoot + "/.glaw/sessions"
+	entries, err := os.ReadDir(sessionsDir)
+	if err != nil {
+		// If directory doesn't exist, return empty list
+		if os.IsNotExist(err) {
+			return []map[string]interface{}{}, nil
+		}
+		return nil, err
+	}
+
+	var result []map[string]interface{}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
+			info, err := e.Info()
+			if err != nil {
+				continue
+			}
+			name := strings.TrimSuffix(e.Name(), ".json")
+			msgCount := 0
+			// Try to read message count from session file
+			data, err := os.ReadFile(sessionsDir + "/" + e.Name())
+			if err == nil {
+				var sess struct {
+					Messages []struct{} `json:"messages"`
+				}
+				if json.Unmarshal(data, &sess) == nil {
+					msgCount = len(sess.Messages)
+				}
+			}
+			result = append(result, map[string]interface{}{
+				"id":           name,
+				"created_at":   info.ModTime(),
+				"message_count": msgCount,
+			})
+		}
+	}
+	return result, nil
 }
 
 // handleAPISessionByID handles GET for /api/sessions/{id}.

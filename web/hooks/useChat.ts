@@ -38,6 +38,18 @@ export function useChat() {
     setMessages((prev) => [...prev, msg]);
   }, []);
 
+  const addCommandResult = useCallback((command: string, message: string) => {
+    const msg: ChatMessage = {
+      id: nextId(),
+      role: "assistant",
+      content: message,
+      timestamp: Date.now(),
+      isCommand: true,
+      command,
+    };
+    setMessages((prev) => [...prev, msg]);
+  }, []);
+
   const addToolUse = useCallback(
     (id: string, name: string, input: string) => {
       const msg: ChatMessage = {
@@ -75,7 +87,10 @@ export function useChat() {
   const clearMessages = useCallback(() => setMessages([]), []);
 
   const loadHistory = useCallback((historyItems: WSIncoming[]) => {
+    // First pass: build all messages, keeping orphan tool results separate
     const restored: ChatMessage[] = [];
+    const toolResultMap = new Map<string, ToolResultInfo>();
+
     for (const item of historyItems) {
       const role = item.role as string;
       if (role === "user" || role === "assistant") {
@@ -84,18 +99,40 @@ export function useChat() {
           role: role as "user" | "assistant",
           content: (item.content as string) || "",
           timestamp: Date.now(),
+          isCommand: item.isCommand as boolean || false,
+          command: item.command as string || undefined,
         });
       } else if (role === "tool") {
-        restored.push({
-          id: nextId(),
-          role: "tool",
-          content: "",
-          timestamp: Date.now(),
-          toolUse: item.toolUse as ToolUseInfo | undefined,
-          toolResult: item.toolResult as ToolResultInfo | undefined,
-        });
+        // If this item has a toolResult but no toolUse, save it for merging later
+        if (item.toolResult && !item.toolUse) {
+          const tr = item.toolResult as ToolResultInfo;
+          toolResultMap.set(tr.id, tr);
+        } else {
+          restored.push({
+            id: nextId(),
+            role: "tool",
+            content: "",
+            timestamp: Date.now(),
+            toolUse: item.toolUse as ToolUseInfo | undefined,
+            toolResult: item.toolResult as ToolResultInfo | undefined,
+          });
+        }
       }
     }
+
+    // Second pass: merge orphan tool results into their matching tool use messages
+    if (toolResultMap.size > 0) {
+      for (const msg of restored) {
+        if (msg.toolUse && !msg.toolResult) {
+          const matchingResult = toolResultMap.get(msg.toolUse.id);
+          if (matchingResult) {
+            msg.toolResult = matchingResult;
+            toolResultMap.delete(msg.toolUse.id);
+          }
+        }
+      }
+    }
+
     setMessages(restored);
   }, []);
 
@@ -118,6 +155,10 @@ export function useChat() {
         case "history":
           if (Array.isArray(d?.messages)) {
             loadHistory(d.messages as WSIncoming[]);
+            // Set session ID if provided
+            if (d?.session_id) {
+              setSessionId(d.session_id as string);
+            }
           }
           break;
         case "user_message":
@@ -125,6 +166,24 @@ export function useChat() {
           break;
         case "assistant_message":
           if (d?.content) addAssistantMessage(d.content as string);
+          break;
+        case "command_result":
+          if (d?.message && d?.command) {
+            addCommandResult(d.command as string, d.message as string);
+          } else if (d?.message) {
+            // Fallback for old format
+            addAssistantMessage(d.message as string);
+          }
+          break;
+        case "session_cleared":
+          clearMessages();
+          break;
+        case "help":
+          if (d?.commands) {
+            addAssistantMessage("Available commands: " + (Array.isArray(d.commands) ? (d.commands as string[]).join(", ") : String(d.commands)));
+          } else if (d?.message) {
+            addAssistantMessage(d.message as string);
+          }
           break;
         case "tool_use":
           if (d?.id && d?.name) {
@@ -150,7 +209,7 @@ export function useChat() {
           break;
       }
     },
-    [addAssistantMessage, addToolUse, addToolResult, sessionId, loadHistory]
+    [addAssistantMessage, addCommandResult, addToolUse, addToolResult, sessionId, loadHistory]
   );
 
   return {

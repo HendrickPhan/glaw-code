@@ -49,7 +49,7 @@ func TestWebSessionStoreList(t *testing.T) {
 	id1 := store.CreateSession()
 	id2 := store.CreateSession()
 
-	sessions := store.ListSessions()
+	sessions := store.ListSessions("")
 	if len(sessions) != 2 {
 		t.Fatalf("expected 2 sessions, got %d", len(sessions))
 	}
@@ -65,7 +65,7 @@ func TestWebSessionStoreList(t *testing.T) {
 
 func TestWebSessionStoreListEmpty(t *testing.T) {
 	store := NewWebSessionStore()
-	sessions := store.ListSessions()
+	sessions := store.ListSessions("")
 	if len(sessions) != 0 {
 		t.Errorf("expected 0 sessions, got %d", len(sessions))
 	}
@@ -108,7 +108,7 @@ func TestUint64ToDecimal(t *testing.T) {
 }
 
 func TestNewWebServer(t *testing.T) {
-	srv := NewWebServer(nil)
+	srv := NewWebServer(nil, "")
 	if srv == nil {
 		t.Fatal("expected non-nil server")
 		return
@@ -122,7 +122,7 @@ func TestNewWebServer(t *testing.T) {
 }
 
 func TestWebServerHandlerRoutes(t *testing.T) {
-	srv := NewWebServer(nil)
+	srv := NewWebServer(nil, "")
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -165,7 +165,7 @@ func TestWebServerHandlerRoutes(t *testing.T) {
 }
 
 func TestWebServerCORS(t *testing.T) {
-	srv := NewWebServer(nil)
+	srv := NewWebServer(nil, "")
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -189,7 +189,7 @@ func TestWebServerCORS(t *testing.T) {
 }
 
 func TestWebServerGetSessionNotFound(t *testing.T) {
-	srv := NewWebServer(nil)
+	srv := NewWebServer(nil, "")
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -204,7 +204,7 @@ func TestWebServerGetSessionNotFound(t *testing.T) {
 }
 
 func TestWebServerSessionListAfterCreate(t *testing.T) {
-	srv := NewWebServer(nil)
+	srv := NewWebServer(nil, "")
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -257,7 +257,7 @@ func TestExtractSessionID(t *testing.T) {
 }
 
 func TestWebServerAPIDisallowedMethods(t *testing.T) {
-	srv := NewWebServer(nil)
+	srv := NewWebServer(nil, "")
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -274,7 +274,7 @@ func TestWebServerAPIDisallowedMethods(t *testing.T) {
 }
 
 func TestWebServerCreateAndGetSession(t *testing.T) {
-	srv := NewWebServer(nil)
+	srv := NewWebServer(nil, "")
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -315,7 +315,7 @@ func TestWebServerCreateAndGetSession(t *testing.T) {
 }
 
 func TestStaticFilesServed(t *testing.T) {
-	srv := NewWebServer(nil)
+	srv := NewWebServer(nil, "")
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 

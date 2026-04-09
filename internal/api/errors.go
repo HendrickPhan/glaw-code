@@ -1,6 +1,9 @@
 package api
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // ErrorType categorizes API errors.
 type ErrorType int
@@ -73,11 +76,39 @@ func NewMissingCredentialsError(msg string) *Error {
 // IsRetryable returns true if the error can be retried.
 func (e *Error) IsRetryable() bool {
 	switch e.Type {
-	case ErrRateLimit:
+	case ErrRateLimit, ErrTimeout, ErrServerError:
 		return true
 	case ErrHTTP:
-		return e.Status == 429 || e.Status == 503 || e.Status == 529
+		// Retry on rate limiting, server errors, and network errors (400 with "Network error" message)
+		if e.Status == 429 || e.Status == 503 || e.Status == 529 || e.Status >= 500 {
+			return true
+		}
+		// Check for network error in status 400 responses
+		if e.Status == 400 && isNetworkErrorMessage(e.Message) {
+			return true
+		}
+		return false
 	default:
 		return false
 	}
+}
+
+// isNetworkErrorMessage checks if the error message contains network-related error indicators
+func isNetworkErrorMessage(msg string) bool {
+	lower := strings.ToLower(msg)
+	networkIndicators := []string{
+		"network error",
+		"connection error",
+		"timeout",
+		"temporary failure",
+		"service unavailable",
+		"gateway timeout",
+		"bad gateway",
+	}
+	for _, indicator := range networkIndicators {
+		if strings.Contains(lower, indicator) {
+			return true
+		}
+	}
+	return false
 }
