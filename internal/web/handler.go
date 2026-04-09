@@ -612,7 +612,7 @@ func (s *WebServer) runAgentTurn(conn *websocket.Conn, sessionID string, sess *W
 
 	if sess.Runtime != nil {
 		rt = sess.Runtime
-		cleanup = func() {} // don't clean up the persistent runtime
+		// No cleanup needed for persistent runtime
 	} else if s.runtimeFactory != nil {
 		var err error
 		rt, cleanup, err = s.runtimeFactory(sess.Conversation)

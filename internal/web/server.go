@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
-	"os"
-	"strings"
 
 	"github.com/hieu-glaw/glaw-code/internal/runtime"
 )
@@ -92,47 +90,6 @@ func (s *WebServer) handleAPISessions(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
-}
-
-// listFilesystemSessions lists sessions from .glaw/sessions directory.
-func listFilesystemSessions(workspaceRoot string) ([]map[string]interface{}, error) {
-	sessionsDir := workspaceRoot + "/.glaw/sessions"
-	entries, err := os.ReadDir(sessionsDir)
-	if err != nil {
-		// If directory doesn't exist, return empty list
-		if os.IsNotExist(err) {
-			return []map[string]interface{}{}, nil
-		}
-		return nil, err
-	}
-
-	var result []map[string]interface{}
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
-			info, err := e.Info()
-			if err != nil {
-				continue
-			}
-			name := strings.TrimSuffix(e.Name(), ".json")
-			msgCount := 0
-			// Try to read message count from session file
-			data, err := os.ReadFile(sessionsDir + "/" + e.Name())
-			if err == nil {
-				var sess struct {
-					Messages []struct{} `json:"messages"`
-				}
-				if json.Unmarshal(data, &sess) == nil {
-					msgCount = len(sess.Messages)
-				}
-			}
-			result = append(result, map[string]interface{}{
-				"id":           name,
-				"created_at":   info.ModTime(),
-				"message_count": msgCount,
-			})
-		}
-	}
-	return result, nil
 }
 
 // handleAPISessionByID handles GET for /api/sessions/{id}.

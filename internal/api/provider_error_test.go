@@ -17,7 +17,7 @@ func TestProviderNetworkError(t *testing.T) {
 		attemptCount++
 		// Always return the network error
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"type":"error",
 			"error":{
 				"message":"Network error, error id: 202604091754268b8c2879a8c24dfb, please contact customer service",
@@ -87,7 +87,7 @@ func TestProviderNetworkErrorRecovery(t *testing.T) {
 		if attemptCount <= 2 {
 			// Fail with network error first 2 times
 			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(`{
+			_, _ = w.Write([]byte(`{
 				"type":"error",
 				"error":{
 					"message":"Network error, error id: 202604091754268b8c2879a8c24dfb, please contact customer service",
@@ -100,7 +100,7 @@ func TestProviderNetworkErrorRecovery(t *testing.T) {
 
 		// Succeed on 3rd attempt
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"id":"msg_123",
 			"type":"message",
 			"role":"assistant",
@@ -212,7 +212,7 @@ func TestDifferentProviderErrors(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				attemptCount++
 				w.WriteHeader(tt.statusCode)
-				w.Write([]byte(tt.responseBody))
+				_, _ = w.Write([]byte(tt.responseBody))
 			}))
 			defer server.Close()
 
