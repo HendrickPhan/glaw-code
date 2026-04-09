@@ -81,7 +81,7 @@ func TestNetworkErrorRetry(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				attemptCount++
 				w.WriteHeader(tt.statusCode)
-				w.Write([]byte(tt.responseBody))
+				_, _ = w.Write([]byte(tt.responseBody))
 			}))
 			defer server.Close()
 
@@ -165,7 +165,7 @@ func TestOpenAINetworkErrorRetry(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				attemptCount++
 				w.WriteHeader(tt.statusCode)
-				w.Write([]byte(tt.responseBody))
+				_, _ = w.Write([]byte(tt.responseBody))
 			}))
 			defer server.Close()
 
@@ -254,12 +254,12 @@ func TestSuccessfulRetry(t *testing.T) {
 		if attemptCount < 3 {
 			// Fail first 2 attempts
 			w.WriteHeader(400)
-			w.Write([]byte(`{"type":"error","error":{"message":"Network error, error id: 12345","code":"1234"}}`))
+			_, _ = w.Write([]byte(`{"type":"error","error":{"message":"Network error, error id: 12345","code":"1234"}}`))
 			return
 		}
 		// Succeed on 3rd attempt
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"id":"msg_123",
 			"type":"message",
 			"role":"assistant",
@@ -311,7 +311,7 @@ func TestRetryWithCancellation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attemptCount++
 		w.WriteHeader(400)
-		w.Write([]byte(`{"error":"Network error"}`))
+		_, _ = w.Write([]byte(`{"error":"Network error"}`))
 	}))
 	defer server.Close()
 
