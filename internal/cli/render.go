@@ -30,6 +30,11 @@ const (
 	Italic  = "\033[3m"
 )
 
+// StreamTextBufSize is the minimum number of bytes that must accumulate before
+// the streaming display flushes a re-rendered markdown buffer. This prevents
+// excessive terminal redraws for very small deltas while still feeling responsive.
+const StreamTextBufSize = 64
+
 // SpinnerFrames are the animation frames for the loading spinner.
 var SpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
@@ -527,4 +532,121 @@ func RenderToolDone(name string, output string, isError bool, elapsed time.Durat
 		Green, name, Reset,
 		Dim, elapsed.Seconds()*1000, Reset,
 		Dim, display, Reset)
+}
+
+// StreamingDisplay manages incremental text output during streaming.
+// It accumulates text deltas and periodically re-renders the full text
+// as markdown. This gives the user real-time feedback while keeping
+// the display clean and properly formatted.
+//
+// Usage:
+//
+//	sd := NewStreamingDisplay()
+//	defer sd.Finish(fullText)
+//	// For each text delta from the API:
+//	sd.Append(delta)
+type StreamingDisplay struct {
+	mu        sync.Mutex
+	buf       strings.Builder   // accumulated raw text
+	lineCount int               // number of lines last rendered (for cursor management)
+	lastFlush time.Time         // time of last render flush
+}
+
+// NewStreamingDisplay creates a new streaming display manager.
+func NewStreamingDisplay() *StreamingDisplay {
+	return &StreamingDisplay{}
+}
+
+// Append adds a text delta and optionally re-renders the display.
+// Rendering is throttled: it happens when the accumulated buffer exceeds
+// StreamTextBufSize since the last flush, or when a newline is present
+// (to keep multi-line output looking good).
+func (sd *StreamingDisplay) Append(delta string) {
+	sd.mu.Lock()
+	defer sd.mu.Unlock()
+
+	sd.buf.WriteString(delta)
+	text := sd.buf.String()
+
+	// Decide whether to re-render now.
+	// Flush if we have a newline (mid-paragraph looks bad) or if enough
+	// text has accumulated since the last flush.
+	shouldFlush := false
+	if strings.Contains(delta, "\n") {
+		shouldFlush = true
+	} else if sd.buf.Len() >= StreamTextBufSize && time.Since(sd.lastFlush) > 30*time.Millisecond {
+		shouldFlush = true
+	}
+
+	if shouldFlush {
+		sd.render(text)
+	}
+}
+
+// render draws the current text as markdown, overwriting the previous render.
+// The caller must hold sd.mu.
+func (sd *StreamingDisplay) render(text string) {
+	sd.lastFlush = time.Now()
+
+	// Clear previous render
+	sd.clearLines()
+
+	// Render new text
+	rendered := RenderMarkdown(text)
+	if rendered != "" {
+		fmt.Fprint(os.Stdout, rendered)
+	}
+
+	// Count lines for next clear
+	sd.lineCount = strings.Count(rendered, "\n")
+	if !strings.HasSuffix(rendered, "\n") && rendered != "" {
+		sd.lineCount++
+	}
+}
+
+// clearLines moves the cursor up and clears lines from the previous render.
+// The caller must hold sd.mu.
+func (sd *StreamingDisplay) clearLines() {
+	if sd.lineCount > 0 {
+		for i := 0; i < sd.lineCount; i++ {
+			ClearLine()
+			if i < sd.lineCount-1 {
+				MoveUp(1)
+			}
+		}
+		// Move back up to the start position
+		if sd.lineCount > 1 {
+			MoveUp(sd.lineCount - 1)
+		}
+		sd.lineCount = 0
+	}
+}
+
+// Finish is called when the stream is complete. It re-renders the final text
+// as full markdown and ensures proper newline termination.
+func (sd *StreamingDisplay) Finish() {
+	sd.mu.Lock()
+	defer sd.mu.Unlock()
+
+	text := sd.buf.String()
+	if text == "" {
+		return
+	}
+
+	sd.clearLines()
+	rendered := RenderMarkdown(text)
+	if rendered != "" {
+		fmt.Fprint(os.Stdout, rendered)
+		if !strings.HasSuffix(rendered, "\n") {
+			fmt.Fprintln(os.Stdout)
+		}
+	}
+	sd.lineCount = 0
+}
+
+// Text returns the accumulated raw text. Thread-safe.
+func (sd *StreamingDisplay) Text() string {
+	sd.mu.Lock()
+	defer sd.mu.Unlock()
+	return sd.buf.String()
 }

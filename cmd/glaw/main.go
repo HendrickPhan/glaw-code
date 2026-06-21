@@ -107,6 +107,7 @@ func main() {
 		configPath  string
 		showVersion bool
 		noInput     bool
+		noStream    bool
 	)
 
 	flag.StringVar(&model, "model", "", "Model to use (e.g. claude-sonnet-4-6, gpt-4o, gemini-2.5-pro, grok-3, ollama:llama3)")
@@ -115,6 +116,7 @@ func main() {
 	flag.StringVar(&configPath, "config", "", "Path to config file")
 	flag.BoolVar(&showVersion, "version", false, "Show version")
 	flag.BoolVar(&noInput, "no-input", false, "Non-interactive mode")
+	flag.BoolVar(&noStream, "no-stream", false, "Disable streaming in REPL (buffer full response before displaying)")
 	flag.Parse()
 
 	if showVersion {
@@ -226,6 +228,7 @@ func main() {
 	} else if !noInput {
 		// Interactive REPL — signal handling is managed by the REPL itself
 		repl := cli.NewREPL(rt)
+		repl.Streaming = !noStream // streaming is on by default; --no-stream disables it
 
 		// Wire the agents provider for /agents command support
 		agentMgr := agent.NewManager(rt)

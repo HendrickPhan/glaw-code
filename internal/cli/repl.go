@@ -22,6 +22,7 @@ type REPL struct {
 	Runtime  *runtime.ConversationRuntime
 	CmdDisp  *commands.Dispatcher
 	reader   *bufio.Reader
+	Streaming bool // when true, use streaming for real-time output (default: true)
 
 	// mu protects the interrupt counter
 	mu             sync.Mutex
@@ -484,12 +485,30 @@ func (r *REPL) handlePromptWithCancel(ctx context.Context, sigChan <-chan os.Sig
 	// Run the action in a goroutine so we can handle signals and user input
 	resultCh := make(chan runResult, 1)
 
-	go func() {
-		err := r.Runtime.RunLoop(actionCtx)
-		resultCh <- runResult{err: err}
-	}()
+	if r.Streaming {
+		// Streaming path: use RunLoopStream for real-time text output
+		go func() {
+			sd := NewStreamingDisplay()
+			defer sd.Finish()
+			err := r.Runtime.RunLoopStream(actionCtx, func(delta string) {
+				// Stop the spinner on first text delta
+				if r.activeSpinner != nil {
+					r.activeSpinner.Stop()
+					r.activeSpinner = nil
+				}
+				sd.Append(delta)
+			})
+			resultCh <- runResult{err: err}
+		}()
+	} else {
+		// Non-streaming path: use RunLoop (original behavior)
+		go func() {
+			err := r.Runtime.RunLoop(actionCtx)
+			resultCh <- runResult{err: err}
+		}()
+	}
 
-	// Show thinking spinner
+	// Show thinking spinner (only until first text delta in streaming mode)
 	spin := NewSpinner("Thinking...")
 	r.activeSpinner = spin
 	defer func() {

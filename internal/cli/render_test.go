@@ -121,3 +121,70 @@ func TestProgressBar(t *testing.T) {
 		t.Errorf("percentage not shown: %q", result)
 	}
 }
+
+// =====================================================================
+// StreamingDisplay tests
+// =====================================================================
+
+func TestStreamingDisplay_BasicAccumulation(t *testing.T) {
+	sd := NewStreamingDisplay()
+	sd.Append("Hello")
+	sd.Append(" ")
+	sd.Append("world!")
+
+	text := sd.Text()
+	if text != "Hello world!" {
+		t.Errorf("Text() = %q, want %q", text, "Hello world!")
+	}
+}
+
+func TestStreamingDisplay_Empty(t *testing.T) {
+	sd := NewStreamingDisplay()
+	if sd.Text() != "" {
+		t.Errorf("Text() = %q, want empty string", sd.Text())
+	}
+}
+
+func TestStreamingDisplay_SingleChunk(t *testing.T) {
+	sd := NewStreamingDisplay()
+	sd.Append("all at once")
+
+	if sd.Text() != "all at once" {
+		t.Errorf("Text() = %q, want %q", sd.Text(), "all at once")
+	}
+}
+
+func TestStreamingDisplay_MultiLineContent(t *testing.T) {
+	sd := NewStreamingDisplay()
+	sd.Append("line one\n")
+	sd.Append("line two\n")
+	sd.Append("line three")
+
+	text := sd.Text()
+	expected := "line one\nline two\nline three"
+	if text != expected {
+		t.Errorf("Text() = %q, want %q", text, expected)
+	}
+}
+
+func TestStreamingDisplay_FinishOnEmpty(t *testing.T) {
+	sd := NewStreamingDisplay()
+	// Should not panic
+	sd.Finish()
+	if sd.Text() != "" {
+		t.Errorf("Text() should remain empty after Finish()")
+	}
+}
+
+func TestStreamingDisplay_LargeAccumulation(t *testing.T) {
+	sd := NewStreamingDisplay()
+	var want strings.Builder
+	for i := 0; i < 100; i++ {
+		chunk := strings.Repeat("x", 10)
+		sd.Append(chunk)
+		want.WriteString(chunk)
+	}
+	if sd.Text() != want.String() {
+		t.Errorf("Text() length mismatch: got %d, want %d", len(sd.Text()), len(want.String()))
+	}
+}
