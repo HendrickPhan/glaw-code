@@ -4,19 +4,21 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // JSON-RPC types for MCP protocol.
 
 type JSONRPCID struct {
-	Num int64
-	Str string
+	Num      int64
+	Str      string
 	IsString bool
 }
 
@@ -54,9 +56,9 @@ func (e *JSONRPCError) Error() string {
 // MCP Protocol Types
 
 type MCPInitializeParams struct {
-	ProtocolVersion string           `json:"protocolVersion"`
-	Capabilities    MCPCapabilities  `json:"capabilities"`
-	ClientInfo      MCPClientInfo    `json:"clientInfo"`
+	ProtocolVersion string          `json:"protocolVersion"`
+	Capabilities    MCPCapabilities `json:"capabilities"`
+	ClientInfo      MCPClientInfo   `json:"clientInfo"`
 }
 
 type MCPCapabilities struct{}
@@ -67,9 +69,9 @@ type MCPClientInfo struct {
 }
 
 type MCPInitializeResult struct {
-	ProtocolVersion string              `json:"protocolVersion"`
+	ProtocolVersion string                `json:"protocolVersion"`
 	Capabilities    MCPServerCapabilities `json:"capabilities"`
-	ServerInfo      MCPServerInfo        `json:"serverInfo"`
+	ServerInfo      MCPServerInfo         `json:"serverInfo"`
 }
 
 type MCPServerCapabilities struct {
@@ -134,18 +136,21 @@ type MCPResourceContents struct {
 
 // StdioProcess manages a child process communicating via JSON-RPC over stdio.
 type StdioProcess struct {
-	cmd          *exec.Cmd
-	stdin        io.WriteCloser
-	stdout       *bufio.Reader
-	mu           sync.Mutex
-	nextID       int64
-	pending      map[int64]chan *JSONRPCResponse
-	cancelFunc   context.CancelFunc
+	cmd        *exec.Cmd
+	stdin      io.WriteCloser
+	stdout     *bufio.Reader
+	mu         sync.Mutex
+	nextID     int64
+	pending    map[int64]chan *JSONRPCResponse
+	cancelFunc context.CancelFunc
 }
 
 // NewStdioProcess starts a child process for JSON-RPC communication.
+// The process lifetime is independent of the caller's context deadline:
+// handshake timeouts must not kill the long-lived server process. The
+// process is terminated by Close, or exits on its own.
 func NewStdioProcess(ctx context.Context, command string, args []string, env map[string]string) (*StdioProcess, error) {
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	cmd := exec.CommandContext(ctx, command, args...)
 
 	// Set environment
@@ -161,8 +166,9 @@ func NewStdioProcess(ctx context.Context, command string, args []string, env map
 		cancel()
 		return nil, fmt.Errorf("creating stdout pipe: %w", err)
 	}
-	// Let stderr go to parent's stderr
-	cmd.Stderr = nil
+	// Forward the child's stderr to our stderr so server-side startup
+	// errors are visible instead of silently discarded.
+	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
 		cancel()
@@ -249,23 +255,47 @@ func (p *StdioProcess) SendNotification(method string, params interface{}) error
 	return p.writeMessage(notif)
 }
 
-// Close shuts down the process.
+// closeGracePeriod is how long Close waits for the server to exit on its own
+// after stdin is closed, before force-killing it.
+const closeGracePeriod = time.Second
+
+// Close shuts down the process: it first closes stdin (a well-behaved
+// server exits on EOF), then force-kills if it lingers. The forced kill is
+// expected and is not reported as an error.
 func (p *StdioProcess) Close() error {
-	p.cancelFunc()
 	_ = p.stdin.Close()
-	return p.cmd.Wait()
+
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- p.cmd.Wait() }()
+
+	select {
+	case err := <-waitCh:
+		// ExitError means the server exited non-zero on its own; the
+		// connection is closed either way, so it is not a Close failure.
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return nil
+		}
+		return err
+	case <-time.After(closeGracePeriod):
+		p.cancelFunc() // kill
+		<-waitCh
+		return nil
+	}
 }
 
+// writeMessage writes a single JSON-RPC message. The MCP stdio transport is
+// newline-delimited JSON (one message per line) — unlike LSP, there are no
+// Content-Length headers.
 func (p *StdioProcess) writeMessage(msg interface{}) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
-	header := fmt.Sprintf("Content-Length: %d\r\n\r\n", len(data))
-	if _, err := p.stdin.Write([]byte(header)); err != nil {
+	if _, err := p.stdin.Write(data); err != nil {
 		return err
 	}
-	_, err = p.stdin.Write(data)
+	_, err = p.stdin.Write([]byte("\n"))
 	return err
 }
 
@@ -273,6 +303,7 @@ func (p *StdioProcess) readLoop() {
 	for {
 		resp, err := p.readMessage()
 		if err != nil {
+			p.failAllPending(err)
 			return
 		}
 		if resp.ID != 0 {
@@ -286,8 +317,23 @@ func (p *StdioProcess) readLoop() {
 	}
 }
 
+// failAllPending unblocks all in-flight requests when the connection dies,
+// so callers never hang waiting on a dead server.
+func (p *StdioProcess) failAllPending(cause error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for id, ch := range p.pending {
+		ch <- &JSONRPCResponse{
+			ID:    id,
+			Error: &JSONRPCError{Code: -32000, Message: fmt.Sprintf("MCP server connection closed: %v", cause)},
+		}
+		delete(p.pending, id)
+	}
+}
+
+// readMessage reads a single newline-delimited JSON-RPC message. Non-JSON
+// lines (server log noise on stdout) are skipped.
 func (p *StdioProcess) readMessage() (*JSONRPCResponse, error) {
-	var contentLength int
 	for {
 		line, err := p.stdout.ReadString('\n')
 		if err != nil {
@@ -295,29 +341,14 @@ func (p *StdioProcess) readMessage() (*JSONRPCResponse, error) {
 		}
 		line = strings.TrimSpace(line)
 		if line == "" {
-			break
+			continue
 		}
-		if strings.HasPrefix(line, "Content-Length:") {
-			clStr := strings.TrimSpace(strings.TrimPrefix(line, "Content-Length:"))
-			contentLength, _ = strconv.Atoi(clStr)
+		var resp JSONRPCResponse
+		if err := json.Unmarshal([]byte(line), &resp); err != nil {
+			continue
 		}
+		return &resp, nil
 	}
-
-	if contentLength == 0 {
-		return nil, fmt.Errorf("missing Content-Length header")
-	}
-
-	body := make([]byte, contentLength)
-	if _, err := io.ReadFull(p.stdout, body); err != nil {
-		return nil, fmt.Errorf("reading body: %w", err)
-	}
-
-	var resp JSONRPCResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("parsing JSON-RPC response: %w", err)
-	}
-
-	return &resp, nil
 }
 
 func envToSlice(env map[string]string) []string {

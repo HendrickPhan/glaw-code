@@ -4,8 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sync"
+	"time"
 )
+
+// initializeTimeout bounds how long connecting to a single MCP server
+// (process start + handshake + tool discovery) may take, so one slow or
+// broken server cannot block application startup indefinitely.
+// It is a variable so tests can shorten it.
+var initializeTimeout = 30 * time.Second
 
 // ServerConfig defines how to connect to an MCP server.
 type ServerConfig struct {
@@ -52,25 +60,38 @@ func NewManager() *Manager {
 }
 
 // InitializeAll connects to all configured MCP servers and discovers tools.
+// Servers are connected concurrently, each bounded by initializeTimeout, so a
+// slow or unreachable server cannot block startup. Connection failures are
+// reported as warnings; the remaining servers still load.
 func (m *Manager) InitializeAll(ctx context.Context, configs map[string]ServerConfig) error {
 	m.mu.Lock()
 	m.configs = configs
 	m.mu.Unlock()
 
+	var wg sync.WaitGroup
 	for name, config := range configs {
-		switch config.Transport {
-		case "stdio":
-			if err := m.connectStdio(ctx, name, config); err != nil {
-				fmt.Printf("MCP: failed to connect to server %q: %v\n", name, err)
+		wg.Add(1)
+		go func(name string, config ServerConfig) {
+			defer wg.Done()
+
+			serverCtx, cancel := context.WithTimeout(ctx, initializeTimeout)
+			defer cancel()
+
+			switch config.Transport {
+			case "stdio":
+				if err := m.connectStdio(serverCtx, name, config); err != nil {
+					fmt.Fprintf(os.Stderr, "MCP: failed to connect to server %q: %v\n", name, err)
+				}
+			case "http", "sse":
+				if err := m.connectHTTP(serverCtx, name, config); err != nil {
+					fmt.Fprintf(os.Stderr, "MCP: failed to connect to server %q: %v\n", name, err)
+				}
+			default:
+				fmt.Fprintf(os.Stderr, "MCP: unsupported transport %q for server %q\n", config.Transport, name)
 			}
-		case "http", "sse":
-			if err := m.connectHTTP(ctx, name, config); err != nil {
-				fmt.Printf("MCP: failed to connect to server %q: %v\n", name, err)
-			}
-		default:
-			fmt.Printf("MCP: unsupported transport %q for server %q\n", config.Transport, name)
-		}
+		}(name, config)
 	}
+	wg.Wait()
 
 	return nil
 }

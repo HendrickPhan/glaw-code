@@ -33,11 +33,11 @@ type PluginSettings struct {
 // MCPServerConfig represents a single MCP server configuration.
 type MCPServerConfig struct {
 	Transport string            `json:"transport"` // "stdio" | "sse" | "http"
-	Command  string            `json:"command,omitempty"`
-	Args      []string            `json:"args,omitempty"`
+	Command   string            `json:"command,omitempty"`
+	Args      []string          `json:"args,omitempty"`
 	URL       string            `json:"url,omitempty"`
-	Headers  map[string]string   `json:"headers,omitempty"`
-	Env       map[string]string   `json:"env,omitempty"`
+	Headers   map[string]string `json:"headers,omitempty"`
+	Env       map[string]string `json:"env,omitempty"`
 }
 
 // Settings represents the full user configuration file.
@@ -46,13 +46,13 @@ type Settings struct {
 	Permissions        PermissionSettings          `json:"permissions"`
 	MaxTokens          int                         `json:"maxTokens,omitempty"`
 	Temperature        *float64                    `json:"temperature,omitempty"`
-	APIKey             string                     `json:"apiKey,omitempty"`
-	APIBaseURL         string                     `json:"apiBaseUrl,omitempty"`
-	SystemPrompt       string                     `json:"systemPrompt,omitempty"`
-	MaxContextMessages int                        `json:"maxContextMessages,omitempty"` // Maximum messages in context (0 = unlimited)
-	Plugins            PluginSettings                `json:"plugins"`
-	Env                map[string]string             `json:"env,omitempty"`
-	EnabledPlugins     map[string]bool               `json:"enabledPlugins,omitempty"`
+	APIKey             string                      `json:"apiKey,omitempty"`
+	APIBaseURL         string                      `json:"apiBaseUrl,omitempty"`
+	SystemPrompt       string                      `json:"systemPrompt,omitempty"`
+	MaxContextMessages int                         `json:"maxContextMessages,omitempty"` // Maximum messages in context (0 = unlimited)
+	Plugins            PluginSettings              `json:"plugins"`
+	Env                map[string]string           `json:"env,omitempty"`
+	EnabledPlugins     map[string]bool             `json:"enabledPlugins,omitempty"`
 	MCPServers         map[string]*MCPServerConfig `json:"mcpServers,omitempty"`
 }
 
@@ -380,7 +380,12 @@ func LoadClaudeMCP() map[string]*MCPServerConfig {
 	for name, srv := range raw.MCPServers {
 		transport := srv.Type
 		if transport == "" {
-			transport = "http"
+			// Older configs omit "type": a command entry is stdio, a URL is http.
+			if srv.Command != "" {
+				transport = "stdio"
+			} else {
+				transport = "http"
+			}
 		}
 		result[name] = &MCPServerConfig{
 			Transport: transport,
