@@ -4,8 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/hieu-glaw/glaw-code/internal/config"
-
+	config "github.com/hieu-glaw/glaw-code/internal/modules/config/domain/entity"
 	permentity "github.com/hieu-glaw/glaw-code/internal/modules/permission/domain/entity"
 	permservice "github.com/hieu-glaw/glaw-code/internal/modules/permission/domain/service"
 )

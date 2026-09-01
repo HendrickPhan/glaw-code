@@ -10,7 +10,7 @@ import (
 
 	"github.com/hieu-glaw/glaw-code/internal/api"
 	agententity "github.com/hieu-glaw/glaw-code/internal/modules/agent/domain/entity"
-	"github.com/hieu-glaw/glaw-code/internal/runtime"
+	conventity "github.com/hieu-glaw/glaw-code/internal/modules/conversation/domain/entity"
 )
 
 // SubAgentConfig re-exports for use in the usecase layer.
@@ -34,7 +34,7 @@ var GetBuiltinSubAgent = agententity.GetBuiltinSubAgent
 // pattern where the parent agent delegates tasks to specialized sub-agents.
 type SubAgentExecutor struct {
 	config       *SubAgentConfig
-	toolExecutor runtime.ToolExecutor
+	toolExecutor conventity.ToolExecutor
 	allTools     []api.ToolDefinition
 	parentModel  string
 	apiClient    api.ProviderClient
@@ -43,7 +43,7 @@ type SubAgentExecutor struct {
 // NewSubAgentExecutor creates a new executor for the given sub-agent config.
 func NewSubAgentExecutor(
 	config *SubAgentConfig,
-	toolExecutor runtime.ToolExecutor,
+	toolExecutor conventity.ToolExecutor,
 	allTools []api.ToolDefinition,
 	parentModel string,
 ) *SubAgentExecutor {
@@ -59,7 +59,7 @@ func NewSubAgentExecutor(
 // for real LLM-backed execution.
 func NewSubAgentExecutorWithClient(
 	config *SubAgentConfig,
-	toolExecutor runtime.ToolExecutor,
+	toolExecutor conventity.ToolExecutor,
 	allTools []api.ToolDefinition,
 	parentModel string,
 	apiClient api.ProviderClient,
@@ -255,20 +255,20 @@ func (e *SubAgentExecutor) BuildSystemPrompt() string {
 
 // SubAgentTask represents a task delegated to a sub-agent.
 type SubAgentTask struct {
-	ID          string       `json:"id"`
-	AgentName   string       `json:"agent_name"`
-	Prompt      string       `json:"prompt"`
-	Status      string       `json:"status"`
-	Result      *AgentResult `json:"result,omitempty"`
-	StartTime   time.Time    `json:"start_time"`
-	EndTime     *time.Time   `json:"end_time,omitempty"`
-	ParentID    string       `json:"parent_id,omitempty"`
+	ID        string       `json:"id"`
+	AgentName string       `json:"agent_name"`
+	Prompt    string       `json:"prompt"`
+	Status    string       `json:"status"`
+	Result    *AgentResult `json:"result,omitempty"`
+	StartTime time.Time    `json:"start_time"`
+	EndTime   *time.Time   `json:"end_time,omitempty"`
+	ParentID  string       `json:"parent_id,omitempty"`
 }
 
 // SubAgentOrchestrator manages the lifecycle of sub-agent tasks. It handles
 // spawning, tracking, and collecting results from sub-agents.
 type SubAgentOrchestrator struct {
-	toolExecutor runtime.ToolExecutor
+	toolExecutor conventity.ToolExecutor
 	allTools     []api.ToolDefinition
 	parentModel  string
 	apiClient    api.ProviderClient
@@ -279,7 +279,7 @@ type SubAgentOrchestrator struct {
 
 // NewSubAgentOrchestrator creates a new orchestrator.
 func NewSubAgentOrchestrator(
-	toolExecutor runtime.ToolExecutor,
+	toolExecutor conventity.ToolExecutor,
 	allTools []api.ToolDefinition,
 	parentModel string,
 ) *SubAgentOrchestrator {
@@ -294,7 +294,7 @@ func NewSubAgentOrchestrator(
 // NewSubAgentOrchestratorWithClient creates a new orchestrator with an API
 // client for real LLM-backed sub-agent execution.
 func NewSubAgentOrchestratorWithClient(
-	toolExecutor runtime.ToolExecutor,
+	toolExecutor conventity.ToolExecutor,
 	allTools []api.ToolDefinition,
 	parentModel string,
 	apiClient api.ProviderClient,

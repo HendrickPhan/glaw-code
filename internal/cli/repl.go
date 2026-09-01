@@ -13,15 +13,18 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hieu-glaw/glaw-code/internal/commands"
-	"github.com/hieu-glaw/glaw-code/internal/runtime"
+	commands "github.com/hieu-glaw/glaw-code/internal/modules/commands/domain/entity"
+	conventity "github.com/hieu-glaw/glaw-code/internal/modules/conversation/domain/entity"
+	permentity "github.com/hieu-glaw/glaw-code/internal/modules/permission/domain/entity"
+	permservice "github.com/hieu-glaw/glaw-code/internal/modules/permission/domain/service"
+	sessionpersistence "github.com/hieu-glaw/glaw-code/internal/modules/session/infrastructure/persistence"
 )
 
 // REPL manages the read-eval-print loop.
 type REPL struct {
-	Runtime  *runtime.ConversationRuntime
-	CmdDisp  *commands.Dispatcher
-	reader   *bufio.Reader
+	Runtime   *conventity.ConversationRuntime
+	CmdDisp   *commands.Dispatcher
+	reader    *bufio.Reader
 	Streaming bool // when true, use streaming for real-time output (default: true)
 
 	// mu protects the interrupt counter
@@ -37,8 +40,8 @@ type REPL struct {
 	history *InputHistory
 
 	// Background action state
-	bgAction     *backgroundAction
-	bgMu         sync.Mutex
+	bgAction       *backgroundAction
+	bgMu           sync.Mutex
 	thinkingDetail bool
 
 	// activeSpinner holds the currently active CLI spinner (e.g. "Thinking...")
@@ -58,7 +61,7 @@ type runResult struct {
 }
 
 // NewREPL creates a new REPL with permission checking wired in.
-func NewREPL(rt *runtime.ConversationRuntime) *REPL {
+func NewREPL(rt *conventity.ConversationRuntime) *REPL {
 	reader := bufio.NewReader(os.Stdin)
 
 	repl := &REPL{
@@ -139,19 +142,19 @@ func askYesNo(reader *bufio.Reader, question string) bool {
 }
 
 // checkToolPermission determines if a tool invocation needs user approval.
-func checkToolPermission(rt *runtime.ConversationRuntime, reader *bufio.Reader, toolName string, input json.RawMessage) bool {
+func checkToolPermission(rt *conventity.ConversationRuntime, reader *bufio.Reader, toolName string, input json.RawMessage) bool {
 	mode := rt.Permissions.Mode
 
 	// Yolo mode: auto-approve everything
-	if mode == runtime.PermYolo {
+	if mode == permentity.PermYolo {
 		return true
 	}
 
 	switch mode {
-	case runtime.PermDangerFullAccess, runtime.PermAllow:
+	case permentity.PermDangerFullAccess, permentity.PermAllow:
 		return true
 
-	case runtime.PermReadOnly:
+	case permentity.PermReadOnly:
 		switch toolName {
 		case "read_file", "search_files", "list_directory", "get_file_info":
 			return true
@@ -160,7 +163,7 @@ func checkToolPermission(rt *runtime.ConversationRuntime, reader *bufio.Reader, 
 			return false
 		}
 
-	case runtime.PermWorkspaceWrite:
+	case permentity.PermWorkspaceWrite:
 		switch toolName {
 		case "bash":
 			// Always prompt for bash in workspace_write mode
@@ -177,7 +180,7 @@ func checkToolPermission(rt *runtime.ConversationRuntime, reader *bufio.Reader, 
 				Path string `json:"path"`
 			}
 			if err := json.Unmarshal(input, &args); err == nil && args.Path != "" {
-				err := runtime.ValidatePathWithinWorkspace(args.Path, rt.Permissions.WorkspaceRoot)
+				err := permservice.ValidatePathAbsWithinWorkspace(args.Path, rt.Permissions.WorkspaceRoot)
 				if err != nil {
 					fmt.Println()
 					fmt.Printf("%s%sPath outside workspace:%s %s\n", Bold+Yellow, ">> ", Reset, err.Error())
@@ -217,7 +220,7 @@ func (r *REPL) gracefulShutdown() {
 	if r.Runtime.Session != nil && r.Runtime.Session.ID != "" {
 		workspaceRoot := r.Runtime.GetWorkspaceRoot()
 		if workspaceRoot != "" {
-			if path, err := runtime.SaveSession(r.Runtime.Session, filepath.Join(workspaceRoot, ".glaw", "sessions")); err == nil {
+			if path, err := sessionpersistence.SaveSession(r.Runtime.Session, filepath.Join(workspaceRoot, ".glaw", "sessions")); err == nil {
 				fmt.Printf("%s  Session saved to %s%s\n", Dim, path, Reset)
 			}
 		}
@@ -424,7 +427,7 @@ func (r *REPL) handleBackgroundResult(bg *backgroundAction, sigChan <-chan os.Si
 		r.bgMu.Unlock()
 
 		if result.err != nil {
-			if runtime.IsActionCancelled(result.err) {
+			if conventity.IsActionCancelled(result.err) {
 				fmt.Printf("%s  Background action cancelled.%s\n", Green, Reset)
 			} else {
 				fmt.Printf("%s  Background error: %v%s\n", Red, result.err, Reset)
@@ -438,7 +441,7 @@ func (r *REPL) handleBackgroundResult(bg *backgroundAction, sigChan <-chan os.Si
 			r.Runtime.Snapshotter.FinishBatch()
 		}
 
-		if path, err := runtime.SaveSession(r.Runtime.Session, ".glaw/sessions"); err == nil {
+		if path, err := sessionpersistence.SaveSession(r.Runtime.Session, ".glaw/sessions"); err == nil {
 			_ = path
 		}
 
@@ -551,7 +554,7 @@ done:
 	}
 
 	if runErr != nil {
-		if runtime.IsActionCancelled(runErr) {
+		if conventity.IsActionCancelled(runErr) {
 			fmt.Printf("%s  Action cancelled. Returning to prompt.%s\n", Green, Reset)
 			return nil
 		}
@@ -560,7 +563,7 @@ done:
 
 	displayUsage(r.Runtime)
 
-	if path, err := runtime.SaveSession(r.Runtime.Session, ".glaw/sessions"); err == nil {
+	if path, err := sessionpersistence.SaveSession(r.Runtime.Session, ".glaw/sessions"); err == nil {
 		_ = path
 	}
 
@@ -568,7 +571,7 @@ done:
 }
 
 // RunOneShot executes a single prompt without entering the REPL.
-func RunOneShot(ctx context.Context, rt *runtime.ConversationRuntime, prompt string) error {
+func RunOneShot(ctx context.Context, rt *conventity.ConversationRuntime, prompt string) error {
 	reader := bufio.NewReader(os.Stdin)
 	rt.PermissionChecker = func(toolName string, input json.RawMessage) bool {
 		return checkToolPermission(rt, reader, toolName, input)
@@ -607,7 +610,7 @@ func RunOneShot(ctx context.Context, rt *runtime.ConversationRuntime, prompt str
 	return nil
 }
 
-func displayUsage(rt *runtime.ConversationRuntime) {
+func displayUsage(rt *conventity.ConversationRuntime) {
 	_, _, total := rt.Usage.EstimateCost(rt.Config.Model)
 	if total > 0 {
 		fmt.Println()

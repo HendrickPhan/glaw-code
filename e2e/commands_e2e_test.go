@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hieu-glaw/glaw-code/internal/commands"
+	commands "github.com/hieu-glaw/glaw-code/internal/modules/commands/domain/entity"
 )
 
 // --- Mock Runtime for command tests ---
@@ -41,11 +41,11 @@ func newMockRuntimeFS(dir string) *mockRuntimeFS {
 	}
 }
 
-func (m *mockRuntimeFS) GetModel() string                    { return m.model }
-func (m *mockRuntimeFS) SetModel(s string)                  { m.model = s }
-func (m *mockRuntimeFS) GetPermissionMode() string           { return m.permMode }
-func (m *mockRuntimeFS) SetPermissionMode(s string)          { m.permMode = s }
-func (m *mockRuntimeFS) IsYoloMode() bool                    { return m.permMode == "yolo" }
+func (m *mockRuntimeFS) GetModel() string           { return m.model }
+func (m *mockRuntimeFS) SetModel(s string)          { m.model = s }
+func (m *mockRuntimeFS) GetPermissionMode() string  { return m.permMode }
+func (m *mockRuntimeFS) SetPermissionMode(s string) { m.permMode = s }
+func (m *mockRuntimeFS) IsYoloMode() bool           { return m.permMode == "yolo" }
 func (m *mockRuntimeFS) ToggleYoloMode() bool {
 	if m.permMode == "yolo" {
 		m.permMode = "workspace_write"
@@ -54,12 +54,12 @@ func (m *mockRuntimeFS) ToggleYoloMode() bool {
 	m.permMode = "yolo"
 	return true
 }
-func (m *mockRuntimeFS) GetMessageCount() int                { return m.msgCount }
-func (m *mockRuntimeFS) GetSessionID() string                { return m.sessionID }
-func (m *mockRuntimeFS) GetUsageInfo() commands.UsageInfo    { return m.usage }
-func (m *mockRuntimeFS) CompactSession() error               { return nil }
-func (m *mockRuntimeFS) ClearSession()                       { m.msgCount = 0 }
-func (m *mockRuntimeFS) GetWorkspaceRoot() string            { return m.workspaceDir }
+func (m *mockRuntimeFS) GetMessageCount() int                   { return m.msgCount }
+func (m *mockRuntimeFS) GetSessionID() string                   { return m.sessionID }
+func (m *mockRuntimeFS) GetUsageInfo() commands.UsageInfo       { return m.usage }
+func (m *mockRuntimeFS) CompactSession() error                  { return nil }
+func (m *mockRuntimeFS) ClearSession()                          { m.msgCount = 0 }
+func (m *mockRuntimeFS) GetWorkspaceRoot() string               { return m.workspaceDir }
 func (m *mockRuntimeFS) GetAllSettings() map[string]interface{} { return m.configMap }
 func (m *mockRuntimeFS) SetConfigValue(key, value string) error {
 	m.configMap[key] = value
@@ -71,10 +71,10 @@ func (m *mockRuntimeFS) RunGitCommand(args ...string) (string, error) {
 	}
 	return m.gitOutput, m.gitError
 }
-func (m *mockRuntimeFS) RevertLastTurn() (int, error)            { return 0, nil }
-func (m *mockRuntimeFS) RevertAll() (int, error)                 { return 0, nil }
-func (m *mockRuntimeFS) LoadSession(sessionID string) error      { m.sessionID = sessionID; return nil }
-func (m *mockRuntimeFS) NewSession()                              { m.sessionID = "sess_new"; m.msgCount = 0 }
+func (m *mockRuntimeFS) RevertLastTurn() (int, error)                        { return 0, nil }
+func (m *mockRuntimeFS) RevertAll() (int, error)                             { return 0, nil }
+func (m *mockRuntimeFS) LoadSession(sessionID string) error                  { m.sessionID = sessionID; return nil }
+func (m *mockRuntimeFS) NewSession()                                         { m.sessionID = "sess_new"; m.msgCount = 0 }
 func (m *mockRuntimeFS) GetSubAgentSessions() []commands.SubAgentSessionInfo { return nil }
 func (m *mockRuntimeFS) ResumeSubAgentSession(agentID string) error {
 	m.sessionID = agentID
@@ -286,7 +286,9 @@ func TestE2ECmdInitCreatesDirectory(t *testing.T) {
 
 func TestE2ECmdMemoryWorkflow(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".glaw", "memory"), 0o755); err != nil { t.Fatal(err) }
+	if err := os.MkdirAll(filepath.Join(dir, ".glaw", "memory"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	chdir(t, dir)
 
 	d := commands.NewDispatcher(newMockRuntimeFS(dir))
@@ -324,7 +326,9 @@ func TestE2ECmdMemoryWorkflow(t *testing.T) {
 
 func TestE2ECmdMemoryListEmpty(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".glaw", "memory"), 0o755); err != nil { t.Fatal(err) }
+	if err := os.MkdirAll(filepath.Join(dir, ".glaw", "memory"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	chdir(t, dir)
 
 	d := commands.NewDispatcher(newMockRuntimeFS(dir))
@@ -348,9 +352,15 @@ func TestE2ECmdMemoryNoDir(t *testing.T) {
 func TestE2ECmdSessionWorkflow(t *testing.T) {
 	dir := t.TempDir()
 	sessionsDir := filepath.Join(dir, ".glaw", "sessions")
-	if err := os.MkdirAll(sessionsDir, 0o755); err != nil { t.Fatal(err) }
-	if err := os.WriteFile(filepath.Join(sessionsDir, "sess_test.json"), []byte(`{"id":"sess_test"}`), 0o644); err != nil { t.Fatal(err) }
-	if err := os.WriteFile(filepath.Join(sessionsDir, "sess_other.json"), []byte(`{"id":"sess_other"}`), 0o644); err != nil { t.Fatal(err) }
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionsDir, "sess_test.json"), []byte(`{"id":"sess_test"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionsDir, "sess_other.json"), []byte(`{"id":"sess_other"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	chdir(t, dir)
 
 	d := commands.NewDispatcher(newMockRuntimeFS(dir))
@@ -999,13 +1009,15 @@ func TestE2ECmdTeleportWithArg(t *testing.T) {
 func TestE2ECmdResumeListSessions(t *testing.T) {
 	dir := t.TempDir()
 	sessionsDir := filepath.Join(dir, ".glaw", "sessions")
-	if err := os.MkdirAll(sessionsDir, 0o755); err != nil { t.Fatal(err) }
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(sessionsDir, "abc123.json"), []byte(`{}`), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		chdir(t, dir)
+		t.Fatal(err)
+	}
+	chdir(t, dir)
 
-		d := commands.NewDispatcher(newMockRuntimeFS(dir))
+	d := commands.NewDispatcher(newMockRuntimeFS(dir))
 	result := handleCmd(t, d, "/resume")
 	if !strings.Contains(result.Message, "abc123") {
 		t.Errorf("resume list: %q", result.Message)
@@ -1066,8 +1078,8 @@ func TestE2ECmdPluginInstallWithManifest(t *testing.T) {
 	// Create a manifest file
 	manifestPath := filepath.Join(dir, "manifest.json")
 	if err := os.WriteFile(manifestPath, []byte(`{"name":"test-plugin","version":"1.0.0"}`), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		t.Fatal(err)
+	}
 
 	d := commands.NewDispatcher(newMockRuntimeFS(dir))
 	result := handleCmd(t, d, "/plugin install "+manifestPath)

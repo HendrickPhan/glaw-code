@@ -9,13 +9,17 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/hieu-glaw/glaw-code/internal/agent"
 	"github.com/hieu-glaw/glaw-code/internal/api"
 	"github.com/hieu-glaw/glaw-code/internal/cli"
-	"github.com/hieu-glaw/glaw-code/internal/config"
-	"github.com/hieu-glaw/glaw-code/internal/mcp"
-	"github.com/hieu-glaw/glaw-code/internal/runtime"
-	"github.com/hieu-glaw/glaw-code/internal/tools"
+	agentusecase "github.com/hieu-glaw/glaw-code/internal/modules/agent/application/usecase"
+	agententity "github.com/hieu-glaw/glaw-code/internal/modules/agent/domain/entity"
+	config "github.com/hieu-glaw/glaw-code/internal/modules/config/domain/entity"
+	conventity "github.com/hieu-glaw/glaw-code/internal/modules/conversation/domain/entity"
+	mcp "github.com/hieu-glaw/glaw-code/internal/modules/mcp/infrastructure/transport"
+	permservice "github.com/hieu-glaw/glaw-code/internal/modules/permission/domain/service"
+	sessionentity "github.com/hieu-glaw/glaw-code/internal/modules/session/domain/entity"
+	sessionpersistence "github.com/hieu-glaw/glaw-code/internal/modules/session/infrastructure/persistence"
+	tools "github.com/hieu-glaw/glaw-code/internal/modules/tools/infrastructure/registry"
 	"github.com/hieu-glaw/glaw-code/internal/web"
 )
 
@@ -52,7 +56,7 @@ func main() {
 		if *serveModel != "" {
 			settings.Model = *serveModel
 		}
-		cfg := runtime.ConfigFromSettings(settings)
+		cfg := conventity.ConfigFromSettings(settings)
 
 		client, err := api.NewProviderClient(cfg.Model)
 		if err != nil {
@@ -69,13 +73,13 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Warning: initializing MCP servers: %v\n", err)
 		}
 
-		runtimeFactory := func(sess *runtime.Session) (*runtime.ConversationRuntime, func(), error) {
+		runtimeFactory := func(sess *sessionentity.Session) (*conventity.ConversationRuntime, func(), error) {
 			toolRegistry := tools.NewRegistry(workspaceRoot)
 			setupSubAgents(toolRegistry, workspaceRoot, cfg.Model, client)
-			snapshotExec := runtime.NewSnapshottingExecutor(toolRegistry)
-			toolExec := runtime.NewCompositeToolExecutor(snapshotExec, mcpManager)
-			permManager := runtime.NewPermissionManager(cfg.PermissionMode, workspaceRoot)
-			rt := runtime.NewConversationRuntime(client, cfg, sess, permManager, toolExec)
+			snapshotExec := conventity.NewSnapshottingExecutor(toolRegistry)
+			toolExec := conventity.NewCompositeToolExecutor(snapshotExec, mcpManager)
+			permManager := permservice.NewPermissionManager(cfg.PermissionMode, workspaceRoot)
+			rt := conventity.NewConversationRuntime(client, cfg, sess, permManager, toolExec)
 			rt.Snapshotter = snapshotExec
 			rt.ClientFactory = func(model string) (api.ProviderClient, error) {
 				return api.NewProviderClient(model)
@@ -157,7 +161,7 @@ func main() {
 		settings.Permissions.Mode = permissions
 	}
 
-	cfg := runtime.ConfigFromSettings(settings)
+	cfg := conventity.ConfigFromSettings(settings)
 
 	// Create API client
 	client, err := api.NewProviderClient(cfg.Model)
@@ -169,9 +173,9 @@ func main() {
 	}
 
 	// Create or load session
-	session := runtime.NewSession()
+	session := sessionentity.NewSession()
 	if sessionID != "" {
-		loaded, err := runtime.LoadSession(filepath.Join(".glaw", "sessions", sessionID+".json"))
+		loaded, err := sessionpersistence.LoadSession(filepath.Join(".glaw", "sessions", sessionID+".json"))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: loading session: %v\n", err)
 		} else {
@@ -180,7 +184,7 @@ func main() {
 	}
 
 	// Create permission manager
-	permManager := runtime.NewPermissionManager(cfg.PermissionMode, workspaceRoot)
+	permManager := permservice.NewPermissionManager(cfg.PermissionMode, workspaceRoot)
 
 	ctx := context.Background()
 
@@ -194,11 +198,11 @@ func main() {
 	// Create tool executor (builtin tools + MCP)
 	toolRegistry := tools.NewRegistry(workspaceRoot)
 	setupSubAgents(toolRegistry, workspaceRoot, cfg.Model, client)
-	snapshotExec := runtime.NewSnapshottingExecutor(toolRegistry)
-	toolExec := runtime.NewCompositeToolExecutor(snapshotExec, mcpManager)
+	snapshotExec := conventity.NewSnapshottingExecutor(toolRegistry)
+	toolExec := conventity.NewCompositeToolExecutor(snapshotExec, mcpManager)
 
 	// Create conversation runtime
-	rt := runtime.NewConversationRuntime(client, cfg, session, permManager, toolExec)
+	rt := conventity.NewConversationRuntime(client, cfg, session, permManager, toolExec)
 	rt.Snapshotter = snapshotExec
 	rt.ClientFactory = func(model string) (api.ProviderClient, error) {
 		return api.NewProviderClient(model)
@@ -215,7 +219,7 @@ func main() {
 			<-sigChan
 			fmt.Println("\nInterrupted. Saving session...")
 			_ = mcpManager.Shutdown()
-			if path, err := runtime.SaveSession(session, filepath.Join(workspaceRoot, ".glaw", "sessions")); err == nil {
+			if path, err := sessionpersistence.SaveSession(session, filepath.Join(workspaceRoot, ".glaw", "sessions")); err == nil {
 				fmt.Printf("Session saved to %s\n", path)
 			}
 			cancel()
@@ -231,8 +235,8 @@ func main() {
 		repl.Streaming = !noStream // streaming is on by default; --no-stream disables it
 
 		// Wire the agents provider for /agents command support
-		agentMgr := agent.NewManager(rt)
-		agentsProvider := agent.NewAgentsProviderAdapter(agentMgr)
+		agentMgr := agentusecase.NewManager(rt)
+		agentsProvider := agentusecase.NewAgentsProviderAdapter(agentMgr)
 		repl.SetAgentsProvider(agentsProvider)
 
 		if err := repl.Run(ctx); err != nil {
@@ -270,16 +274,16 @@ func convertMCPConfigs(servers map[string]*config.MCPServerConfig) map[string]mc
 // orchestrator into the tool registry so the sub_agent tool works.
 func setupSubAgents(reg *tools.Registry, workspaceRoot string, model string, apiClient api.ProviderClient) {
 	// Load custom agent configs from .glaw/agents/ (project) and ~/.glaw/agents/ (user)
-	customAgents, err := agent.LoadAllSubAgents(workspaceRoot)
+	customAgents, err := agententity.LoadAllSubAgents(workspaceRoot)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: loading sub-agent configs: %v\n", err)
 	}
 	if len(customAgents) > 0 {
-		agent.SetCustomConfigs(customAgents)
+		agentusecase.SetCustomConfigs(customAgents)
 	}
 
 	// Create and wire the orchestrator (with API client for real LLM-backed execution)
 	specs := reg.GetToolSpecs()
-	orch := agent.NewSubAgentOrchestratorWithClient(reg, specs, model, apiClient)
+	orch := agentusecase.NewSubAgentOrchestratorWithClient(reg, specs, model, apiClient)
 	reg.SetOrchestrator(orch)
 }

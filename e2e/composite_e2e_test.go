@@ -6,15 +6,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hieu-glaw/glaw-code/internal/mcp"
-	"github.com/hieu-glaw/glaw-code/internal/runtime"
+	conventity "github.com/hieu-glaw/glaw-code/internal/modules/conversation/domain/entity"
+	convinfra "github.com/hieu-glaw/glaw-code/internal/modules/conversation/infrastructure"
+	mcp "github.com/hieu-glaw/glaw-code/internal/modules/mcp/infrastructure/transport"
 )
 
 // --- CompositeToolExecutor E2E Tests ---
 
 func TestE2ECompositeBuiltinToolSucceeds(t *testing.T) {
-	builtin := runtime.NewBuiltinToolExecutor(t.TempDir())
-	composite := runtime.NewCompositeToolExecutor(builtin, nil)
+	builtin := convinfra.NewBuiltinToolExecutor(t.TempDir())
+	composite := conventity.NewCompositeToolExecutor(builtin, nil)
 
 	out, err := composite.ExecuteTool(context.Background(), "bash", json.RawMessage(`{"command":"echo hi"}`))
 	if err != nil {
@@ -48,8 +49,8 @@ func TestE2ECompositeUnknownToolFallsBackToMCP(t *testing.T) {
 		"test": {Transport: "http", URL: mock.URL()},
 	})
 
-	builtin := runtime.NewBuiltinToolExecutor(t.TempDir())
-	composite := runtime.NewCompositeToolExecutor(builtin, mgr)
+	builtin := convinfra.NewBuiltinToolExecutor(t.TempDir())
+	composite := conventity.NewCompositeToolExecutor(builtin, mgr)
 
 	out, err := composite.ExecuteTool(ctx, "custom_search", json.RawMessage(`{"query":"test"}`))
 	if err != nil {
@@ -86,8 +87,8 @@ func TestE2ECompositeMCPFallbackWithToolResult(t *testing.T) {
 		"test": {Transport: "http", URL: mock.URL()},
 	})
 
-	builtin := runtime.NewBuiltinToolExecutor(t.TempDir())
-	composite := runtime.NewCompositeToolExecutor(builtin, mgr)
+	builtin := convinfra.NewBuiltinToolExecutor(t.TempDir())
+	composite := conventity.NewCompositeToolExecutor(builtin, mgr)
 
 	out, err := composite.ExecuteTool(ctx, "translate", json.RawMessage(`{"text":"hello","lang":"fr"}`))
 	if err != nil {
@@ -119,8 +120,8 @@ func TestE2ECompositeBuiltinTakesPriority(t *testing.T) {
 	})
 
 	dir := t.TempDir()
-	builtin := runtime.NewBuiltinToolExecutor(dir)
-	composite := runtime.NewCompositeToolExecutor(builtin, mgr)
+	builtin := convinfra.NewBuiltinToolExecutor(dir)
+	composite := conventity.NewCompositeToolExecutor(builtin, mgr)
 
 	// Write a file first via builtin write_file
 	writeOut, err := builtin.ExecuteTool(ctx, "write_file", json.RawMessage(`{"path":"test.txt","content":"builtin content"}`))
@@ -144,8 +145,8 @@ func TestE2ECompositeBuiltinTakesPriority(t *testing.T) {
 }
 
 func TestE2ECompositeNilMCPManager(t *testing.T) {
-	builtin := runtime.NewBuiltinToolExecutor(t.TempDir())
-	composite := runtime.NewCompositeToolExecutor(builtin, nil)
+	builtin := convinfra.NewBuiltinToolExecutor(t.TempDir())
+	composite := conventity.NewCompositeToolExecutor(builtin, nil)
 
 	out, err := composite.ExecuteTool(context.Background(), "unknown_tool", json.RawMessage(`{}`))
 	if err != nil {
@@ -177,7 +178,7 @@ func TestE2ECompositeNilBuiltin(t *testing.T) {
 	})
 
 	// nil builtin -> noopToolExecutor -> always "Unknown tool" -> falls back to MCP
-	composite := runtime.NewCompositeToolExecutor(nil, mgr)
+	composite := conventity.NewCompositeToolExecutor(nil, mgr)
 
 	out, err := composite.ExecuteTool(ctx, "mcp_tool", json.RawMessage(`{}`))
 	if err != nil {
@@ -218,8 +219,8 @@ func TestE2ECompositeGetToolSpecs(t *testing.T) {
 		"test": {Transport: "http", URL: mock.URL()},
 	})
 
-	builtin := runtime.NewBuiltinToolExecutor(t.TempDir())
-	composite := runtime.NewCompositeToolExecutor(builtin, mgr)
+	builtin := convinfra.NewBuiltinToolExecutor(t.TempDir())
+	composite := conventity.NewCompositeToolExecutor(builtin, mgr)
 
 	specs := composite.GetToolSpecs()
 	// BuiltinToolExecutor has 4 tools: bash, read_file, write_file, edit_file
@@ -259,8 +260,8 @@ func TestE2ECompositeGetToolSpecs(t *testing.T) {
 }
 
 func TestE2ECompositeGetToolSpecsWithNilMCP(t *testing.T) {
-	builtin := runtime.NewBuiltinToolExecutor(t.TempDir())
-	composite := runtime.NewCompositeToolExecutor(builtin, nil)
+	builtin := convinfra.NewBuiltinToolExecutor(t.TempDir())
+	composite := conventity.NewCompositeToolExecutor(builtin, nil)
 
 	specs := composite.GetToolSpecs()
 	if len(specs) != 4 {
@@ -289,8 +290,8 @@ func TestE2ECompositeFullWorkflow(t *testing.T) {
 	})
 
 	dir := t.TempDir()
-	builtin := runtime.NewBuiltinToolExecutor(dir)
-	composite := runtime.NewCompositeToolExecutor(builtin, mgr)
+	builtin := convinfra.NewBuiltinToolExecutor(dir)
+	composite := conventity.NewCompositeToolExecutor(builtin, mgr)
 
 	// Write a file via builtin write_file
 	writeOut, err := composite.ExecuteTool(ctx, "write_file", json.RawMessage(`{"path":"data.txt","content":"important data"}`))
@@ -324,8 +325,8 @@ func TestE2ECompositeFullWorkflow(t *testing.T) {
 
 func TestE2ECompositeMCPErrorReturnsBuiltinError(t *testing.T) {
 	// When both builtin and MCP don't know the tool, the original builtin error is returned
-	builtin := runtime.NewBuiltinToolExecutor(t.TempDir())
-	composite := runtime.NewCompositeToolExecutor(builtin, nil) // nil MCP, so fallback also fails
+	builtin := convinfra.NewBuiltinToolExecutor(t.TempDir())
+	composite := conventity.NewCompositeToolExecutor(builtin, nil) // nil MCP, so fallback also fails
 
 	out, err := composite.ExecuteTool(context.Background(), "totally_unknown", json.RawMessage(`{}`))
 	if err != nil {

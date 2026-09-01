@@ -12,10 +12,11 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-
 	"github.com/hieu-glaw/glaw-code/internal/api"
-	"github.com/hieu-glaw/glaw-code/internal/commands"
-	"github.com/hieu-glaw/glaw-code/internal/runtime"
+	commands "github.com/hieu-glaw/glaw-code/internal/modules/commands/domain/entity"
+	conventity "github.com/hieu-glaw/glaw-code/internal/modules/conversation/domain/entity"
+	sessionentity "github.com/hieu-glaw/glaw-code/internal/modules/session/domain/entity"
+	sessionpersistence "github.com/hieu-glaw/glaw-code/internal/modules/session/infrastructure/persistence"
 )
 
 // WSMessage is a message sent/received over WebSocket.
@@ -587,7 +588,7 @@ func (s *WebServer) saveSession(sess *WrappedSession) {
 		return
 	}
 	sessionsDir := filepath.Join(s.workspaceRoot, ".glaw", "sessions")
-	if path, err := runtime.SaveSession(sess.Conversation, sessionsDir); err != nil {
+	if path, err := sessionpersistence.SaveSession(sess.Conversation, sessionsDir); err != nil {
 		log.Printf("Warning: failed to save session %s: %v", sess.ID, err)
 	} else {
 		log.Printf("Session saved to %s", path)
@@ -607,7 +608,7 @@ func (s *WebServer) runAgentTurn(conn *websocket.Conn, sessionID string, sess *W
 	}()
 
 	// Use the session's existing runtime if available, otherwise create one
-	var rt *runtime.ConversationRuntime
+	var rt *conventity.ConversationRuntime
 	var cleanup func()
 
 	if sess.Runtime != nil {
@@ -653,8 +654,8 @@ func (s *WebServer) runAgentTurn(conn *websocket.Conn, sessionID string, sess *W
 					Type:      "tool_use",
 					SessionID: sessionID,
 					Data: map[string]interface{}{
-						"id":   block.ID,
-						"name": block.Name,
+						"id":    block.ID,
+						"name":  block.Name,
 						"input": string(block.Input),
 					},
 				})
@@ -709,9 +710,9 @@ func sendWS(conn *websocket.Conn, msg WSResponse) {
 	}
 }
 
-// convertSessionMessages flattens runtime.Session messages into a format
+// convertSessionMessages flattens sessionentity.Session messages into a format
 // the frontend can render directly (role + content pairs).
-func convertSessionMessages(session *runtime.Session) []map[string]interface{} {
+func convertSessionMessages(session *sessionentity.Session) []map[string]interface{} {
 	var result []map[string]interface{}
 
 	for _, msg := range session.Messages {
@@ -758,7 +759,7 @@ func convertSessionMessages(session *runtime.Session) []map[string]interface{} {
 					})
 				case api.ContentToolUse:
 					result = append(result, map[string]interface{}{
-						"role":   "tool",
+						"role": "tool",
 						"toolUse": map[string]interface{}{
 							"id":    block.ID,
 							"name":  block.Name,

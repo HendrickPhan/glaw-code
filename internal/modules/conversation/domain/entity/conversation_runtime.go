@@ -11,24 +11,24 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hieu-glaw/glaw-code/internal/commands"
-	"github.com/hieu-glaw/glaw-code/internal/config"
 	api "github.com/hieu-glaw/glaw-code/internal/api"
-	sessionentity "github.com/hieu-glaw/glaw-code/internal/modules/session/domain/entity"
+	commands "github.com/hieu-glaw/glaw-code/internal/modules/commands/domain/entity"
+	config "github.com/hieu-glaw/glaw-code/internal/modules/config/domain/entity"
 	permentity "github.com/hieu-glaw/glaw-code/internal/modules/permission/domain/entity"
 	permservice "github.com/hieu-glaw/glaw-code/internal/modules/permission/domain/service"
+	sessionentity "github.com/hieu-glaw/glaw-code/internal/modules/session/domain/entity"
 )
 
 // Config holds application configuration.
 type Config struct {
-	Model            string              `json:"model"`
-	APIKey           string              `json:"apiKey,omitempty"`
-	BaseURL          string              `json:"baseUrl,omitempty"`
-	MaxTokens        int                 `json:"maxTokens"`
-	Temperature      float64             `json:"temperature"`
-	SystemPromptPath string              `json:"systemPromptPath,omitempty"`
-	PermissionMode   permentity.PermissionMode `json:"permissionMode"`
-	MaxContextMessages int                `json:"maxContextMessages,omitempty"` // Maximum messages to include in context (0 = unlimited)
+	Model              string                    `json:"model"`
+	APIKey             string                    `json:"apiKey,omitempty"`
+	BaseURL            string                    `json:"baseUrl,omitempty"`
+	MaxTokens          int                       `json:"maxTokens"`
+	Temperature        float64                   `json:"temperature"`
+	SystemPromptPath   string                    `json:"systemPromptPath,omitempty"`
+	PermissionMode     permentity.PermissionMode `json:"permissionMode"`
+	MaxContextMessages int                       `json:"maxContextMessages,omitempty"` // Maximum messages to include in context (0 = unlimited)
 }
 
 // DefaultConfig returns sensible defaults.
@@ -183,12 +183,12 @@ func (r *ConversationRuntime) Turn(ctx context.Context) (*TurnResult, error) {
 	messages := r.Session.AsAPIMessagesWithLimit(r.Config.MaxContextMessages)
 
 	req := api.Request{
-		Model:      r.Config.Model,
-		Messages:   messages,
-		Tools:      toolDefs,
-		MaxTokens:  r.Config.MaxTokens,
-		Stream:     false,
-		System:     systemPrompt,
+		Model:     r.Config.Model,
+		Messages:  messages,
+		Tools:     toolDefs,
+		MaxTokens: r.Config.MaxTokens,
+		Stream:    false,
+		System:    systemPrompt,
 	}
 
 	resp, err := r.APIClient.SendMessage(ctx, req)
@@ -706,12 +706,12 @@ func (r *ConversationRuntime) ConsumeStream(ctx context.Context, ch <-chan api.S
 // StreamTurn calls the API with streaming and returns the channel of events.
 func (r *ConversationRuntime) StreamTurn(ctx context.Context) (<-chan api.StreamEvent, error) {
 	req := api.Request{
-		Model:      r.Config.Model,
-		Messages:   r.Session.AsAPIMessagesWithLimit(r.Config.MaxContextMessages),
-		Tools:      r.BuildToolDefinitions(),
-			MaxTokens:  r.Config.MaxTokens,
-		Stream:     true,
-		System:     r.BuildSystemPrompt(),
+		Model:     r.Config.Model,
+		Messages:  r.Session.AsAPIMessagesWithLimit(r.Config.MaxContextMessages),
+		Tools:     r.BuildToolDefinitions(),
+		MaxTokens: r.Config.MaxTokens,
+		Stream:    true,
+		System:    r.BuildSystemPrompt(),
 	}
 
 	return r.APIClient.StreamMessage(ctx, req)
@@ -810,8 +810,8 @@ func (r *ConversationRuntime) AccumulateStream(ctx context.Context, ch <-chan ap
 type anthropicDelta struct {
 	Type  string `json:"type"`
 	Delta struct {
-		Type string `json:"type"`     // "text_delta" or "input_json_delta"
-		Text string `json:"text"`     // for text_delta
+		Type string `json:"type"` // "text_delta" or "input_json_delta"
+		Text string `json:"text"` // for text_delta
 		// JSON args deltas for tool_use are accumulated by the API client
 	} `json:"delta"`
 }
@@ -931,14 +931,14 @@ func LoadSession(path string) (*sessionentity.Session, error) {
 
 // ANSI codes for terminal output (used by RunLoop rendering).
 const (
-	ansiReset   = "\033[0m"
-	ansiBold    = "\033[1m"
-	ansiDim     = "\033[2m"
-	ansiCyan    = "\033[36m"
-	ansiGreen   = "\033[32m"
-	ansiYellow  = "\033[33m"
-	ansiRed     = "\033[31m"
-	ansiItalic  = "\033[3m"
+	ansiReset  = "\033[0m"
+	ansiBold   = "\033[1m"
+	ansiDim    = "\033[2m"
+	ansiCyan   = "\033[36m"
+	ansiGreen  = "\033[32m"
+	ansiYellow = "\033[33m"
+	ansiRed    = "\033[31m"
+	ansiItalic = "\033[3m"
 )
 
 // renderToolHeader renders the one-line header shown when a tool starts.
@@ -980,7 +980,9 @@ func renderToolDone(name string, output string, isError bool, elapsed time.Durat
 func toolDisplayInfo(name string, input json.RawMessage) string {
 	switch name {
 	case "bash":
-		var args struct{ Command string `json:"command"` }
+		var args struct {
+			Command string `json:"command"`
+		}
 		if json.Unmarshal(input, &args) == nil && args.Command != "" {
 			if len(args.Command) > 60 {
 				return args.Command[:57] + "..."
@@ -988,17 +990,23 @@ func toolDisplayInfo(name string, input json.RawMessage) string {
 			return args.Command
 		}
 	case "write_file", "edit_file", "read_file":
-		var args struct{ Path string `json:"path"` }
+		var args struct {
+			Path string `json:"path"`
+		}
 		if json.Unmarshal(input, &args) == nil {
 			return args.Path
 		}
 	case "glob_search":
-		var args struct{ Pattern string `json:"pattern"` }
+		var args struct {
+			Pattern string `json:"pattern"`
+		}
 		if json.Unmarshal(input, &args) == nil {
 			return args.Pattern
 		}
 	case "grep_search":
-		var args struct{ Pattern string `json:"pattern"` }
+		var args struct {
+			Pattern string `json:"pattern"`
+		}
 		if json.Unmarshal(input, &args) == nil {
 			return args.Pattern
 		}

@@ -12,8 +12,7 @@ import (
 	"time"
 
 	api "github.com/hieu-glaw/glaw-code/internal/api"
-	"github.com/hieu-glaw/glaw-code/internal/mcp"
-
+	mcp "github.com/hieu-glaw/glaw-code/internal/modules/mcp/infrastructure/transport"
 	permentity "github.com/hieu-glaw/glaw-code/internal/modules/permission/domain/entity"
 	permservice "github.com/hieu-glaw/glaw-code/internal/modules/permission/domain/service"
 	sessionentity "github.com/hieu-glaw/glaw-code/internal/modules/session/domain/entity"

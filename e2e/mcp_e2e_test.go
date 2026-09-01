@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hieu-glaw/glaw-code/internal/mcp"
+	mcp "github.com/hieu-glaw/glaw-code/internal/modules/mcp/infrastructure/transport"
 )
 
 // --- Mock MCP Server Infrastructure ---
@@ -136,8 +136,8 @@ func newMockMCPServer(t *testing.T, cfg mockMCPConfig) *mockMCPServer {
 	return ms
 }
 
-func (ms *mockMCPServer) URL() string   { return ms.server.URL }
-func (ms *mockMCPServer) Close()        { ms.server.Close() }
+func (ms *mockMCPServer) URL() string { return ms.server.URL }
+func (ms *mockMCPServer) Close()      { ms.server.Close() }
 func (ms *mockMCPServer) Calls() []string {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
@@ -368,9 +368,9 @@ func TestE2EMCPProtocolHandshake(t *testing.T) {
 
 func TestE2EMCPShutdown(t *testing.T) {
 	mock := newMockMCPServer(t, mockMCPConfig{
-		ServerName:    "shutdown-test",
-		Tools:         []mcp.MCPTool{{Name: "test", Description: "test", InputSchema: map[string]interface{}{"type": "object"}}},
-		ToolHandlers:  map[string]func(args map[string]interface{}) string{"test": func(args map[string]interface{}) string { return "ok" }},
+		ServerName:   "shutdown-test",
+		Tools:        []mcp.MCPTool{{Name: "test", Description: "test", InputSchema: map[string]interface{}{"type": "object"}}},
+		ToolHandlers: map[string]func(args map[string]interface{}) string{"test": func(args map[string]interface{}) string { return "ok" }},
 	})
 
 	ctx := context.Background()

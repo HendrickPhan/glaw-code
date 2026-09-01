@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/hieu-glaw/glaw-code/internal/runtime"
+	sessionentity "github.com/hieu-glaw/glaw-code/internal/modules/session/domain/entity"
 )
 
 // SessionID is a unique session identifier.
@@ -40,12 +40,12 @@ func (s *SessionStore) AllocateID() SessionID {
 type Session struct {
 	ID           string
 	CreatedAt    time.Time
-	Conversation *runtime.Session
+	Conversation *sessionentity.Session
 	Events       *Broadcaster
 }
 
 // NewSession creates a new server session.
-func NewSession(id string, conv *runtime.Session) *Session {
+func NewSession(id string, conv *sessionentity.Session) *Session {
 	return &Session{
 		ID:           id,
 		CreatedAt:    time.Now(),
@@ -126,9 +126,9 @@ type ListSessionsResponse struct {
 }
 
 type SessionDetailsResponse struct {
-	ID        string           `json:"id"`
-	CreatedAt time.Time        `json:"created_at"`
-	Session   *runtime.Session `json:"session"`
+	ID        string                 `json:"id"`
+	CreatedAt time.Time              `json:"created_at"`
+	Session   *sessionentity.Session `json:"session"`
 }
 
 type SendMessageRequest struct {
@@ -210,7 +210,7 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	id := s.store.AllocateID()
-	session := NewSession(id, runtime.NewSession())
+	session := NewSession(id, sessionentity.NewSession())
 
 	s.store.mu.Lock()
 	s.store.Sessions[id] = session
@@ -353,5 +353,3 @@ func (s *Server) Start(addr string) error {
 	log.Printf("Starting server on %s", addr)
 	return http.ListenAndServe(addr, s.Handler())
 }
-
-

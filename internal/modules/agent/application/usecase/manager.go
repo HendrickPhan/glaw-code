@@ -9,9 +9,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	cmdentity "github.com/hieu-glaw/glaw-code/internal/modules/commands/domain/entity"
 	agententity "github.com/hieu-glaw/glaw-code/internal/modules/agent/domain/entity"
-	"github.com/hieu-glaw/glaw-code/internal/runtime"
+	cmdentity "github.com/hieu-glaw/glaw-code/internal/modules/commands/domain/entity"
+	conventity "github.com/hieu-glaw/glaw-code/internal/modules/conversation/domain/entity"
 )
 
 // Re-export entity types used by this package.
@@ -42,12 +42,12 @@ type Manager struct {
 	agents map[string]*Agent
 	jobs   map[string]*AgentJob
 	mu     sync.RWMutex
-	rt     *runtime.ConversationRuntime
+	rt     *conventity.ConversationRuntime
 	seq    atomic.Int64
 }
 
 // NewManager creates a new agent manager backed by the given runtime.
-func NewManager(rt *runtime.ConversationRuntime) *Manager {
+func NewManager(rt *conventity.ConversationRuntime) *Manager {
 	return &Manager{
 		agents: make(map[string]*Agent),
 		jobs:   make(map[string]*AgentJob),
@@ -548,9 +548,9 @@ func (a *AgentsProviderAdapter) CancelAgentJob(jobID string) error {
 	return a.mgr.CancelJob(jobID)
 }
 
-// --- runtime.SubAgentSessionProvider adapter ---
+// --- conventity.SubAgentSessionProvider adapter ---
 
-// SubAgentSessionAdapter implements runtime.SubAgentSessionProvider by
+// SubAgentSessionAdapter implements conventity.SubAgentSessionProvider by
 // querying the agent.Manager for active/completed agents and their sessions.
 type SubAgentSessionAdapter struct {
 	mgr *Manager

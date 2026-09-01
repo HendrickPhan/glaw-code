@@ -7,12 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hieu-glaw/glaw-code/internal/config"
-	"github.com/hieu-glaw/glaw-code/internal/shared/api"
-
+	config "github.com/hieu-glaw/glaw-code/internal/modules/config/domain/entity"
 	permentity "github.com/hieu-glaw/glaw-code/internal/modules/permission/domain/entity"
 	permservice "github.com/hieu-glaw/glaw-code/internal/modules/permission/domain/service"
 	sessionentity "github.com/hieu-glaw/glaw-code/internal/modules/session/domain/entity"
+	"github.com/hieu-glaw/glaw-code/internal/shared/api"
 )
 
 func apiUsage(in, out int) api.Usage {

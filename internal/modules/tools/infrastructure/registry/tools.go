@@ -18,23 +18,22 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hieu-glaw/glaw-code/internal/agent"
 	"github.com/hieu-glaw/glaw-code/internal/api"
-	"github.com/hieu-glaw/glaw-code/internal/config"
-
-	"github.com/hieu-glaw/glaw-code/internal/runtime"
+	agentusecase "github.com/hieu-glaw/glaw-code/internal/modules/agent/application/usecase"
+	config "github.com/hieu-glaw/glaw-code/internal/modules/config/domain/entity"
+	conventity "github.com/hieu-glaw/glaw-code/internal/modules/conversation/domain/entity"
 )
 
 // ToolFunc is a handler for a named tool.
-type ToolFunc func(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error)
+type ToolFunc func(ctx context.Context, input json.RawMessage) (*conventity.ToolOutput, error)
 
 // Registry holds all registered tool definitions and their handlers.
 type Registry struct {
-	workspaceRoot         string
-	orchestrator          *agent.SubAgentOrchestrator
-	backgroundCmdManager  *BackgroundCommandManager
-	handlers              map[string]ToolFunc
-	specs                 []api.ToolDefinition
+	workspaceRoot        string
+	orchestrator         *agentusecase.SubAgentOrchestrator
+	backgroundCmdManager *BackgroundCommandManager
+	handlers             map[string]ToolFunc
+	specs                []api.ToolDefinition
 }
 
 // NewRegistry creates a new tool registry with built-in tools.
@@ -49,7 +48,7 @@ func NewRegistry(workspaceRoot string) *Registry {
 }
 
 // SetOrchestrator sets the sub-agent orchestrator for the sub_agent tool.
-func (r *Registry) SetOrchestrator(o *agent.SubAgentOrchestrator) {
+func (r *Registry) SetOrchestrator(o *agentusecase.SubAgentOrchestrator) {
 	r.orchestrator = o
 }
 
@@ -139,28 +138,28 @@ func (r *Registry) registerBuiltinTools() {
 			Description: "Read or write configuration settings",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["read","write"],"description":"Whether to read or write the setting"},"path":{"type":"string","description":"Dot-separated path to the setting (e.g. permissions.mode)"},"value":{"description":"Value to write (any JSON type)"}},"required":["action","path"]}`),
 		}, r.configTool},
-			{api.ToolDefinition{
-				Name:        "analyze",
-				Description: "Analyze the project source code to produce a comprehensive summary, dependency graph, and code statistics. Results are saved to .glaw/analysis.json for quick retrieval later.",
-				InputSchema: json.RawMessage(`{"type":"object","properties":{"mode":{"type":"string","enum":["full","summary","graph"],"description":"Analysis mode: full (complete analysis), summary (quick overview), graph (dependency graph only)","default":"full"},"format":{"type":"string","enum":["text","mermaid","dot","json"],"description":"Output format for dependency graph: text, mermaid, dot, or json","default":"text"}},"required":[]}`),
-			}, r.analyzeTool},
+		{api.ToolDefinition{
+			Name:        "analyze",
+			Description: "Analyze the project source code to produce a comprehensive summary, dependency graph, and code statistics. Results are saved to .glaw/analysis.json for quick retrieval later.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"mode":{"type":"string","enum":["full","summary","graph"],"description":"Analysis mode: full (complete analysis), summary (quick overview), graph (dependency graph only)","default":"full"},"format":{"type":"string","enum":["text","mermaid","dot","json"],"description":"Output format for dependency graph: text, mermaid, dot, or json","default":"text"}},"required":[]}`),
+		}, r.analyzeTool},
 		{api.ToolDefinition{
 			Name:        "sub_agent",
 			Description: "Delegate a task to a specialized sub-agent (e.g., Explore, Plan, Verification, code-reviewer, security-auditor, test-writer, docs-writer, refactorer, general-purpose, or any custom agent). The sub-agent runs asynchronously in the background. Returns a job ID that can be used with sub_agent_result to fetch the output when ready, or use wait=true to block until done.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"agent_name":{"type":"string","description":"Name of the sub-agent to use. Available agents: Explore, Plan, Verification, code-reviewer, security-auditor, test-writer, docs-writer, refactorer, general-purpose, or any custom agent defined in .glaw/agents/"},"prompt":{"type":"string","description":"The task description to delegate to the sub-agent. Be specific about what the agent should do."},"wait":{"type":"boolean","description":"Whether to wait for the sub-agent to complete before returning. Default: false (runs in background). Set to true only for quick tasks where you need the result immediately."}},"required":["agent_name","prompt"]}`),
 		}, r.subAgentTool},
-			{api.ToolDefinition{
-				Name:        "sub_agent_result",
-				Description: "Fetch the result of a background sub-agent job. If the job is still running, this will wait until it completes. Use this after sub_agent returns a job ID (when wait=false) to get the final output.",
-				InputSchema: json.RawMessage(`{"type":"object","properties":{"job_id":{"type":"string","description":"The job ID returned by the sub_agent tool"}},"required":["job_id"]}`),
-			}, r.subAgentResultTool},
+		{api.ToolDefinition{
+			Name:        "sub_agent_result",
+			Description: "Fetch the result of a background sub-agent job. If the job is still running, this will wait until it completes. Use this after sub_agent returns a job ID (when wait=false) to get the final output.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"job_id":{"type":"string","description":"The job ID returned by the sub_agent tool"}},"required":["job_id"]}`),
+		}, r.subAgentResultTool},
 	}
 
 	for _, t := range tools {
-			r.handlers[t.spec.Name] = t.handler
-			r.specs = append(r.specs, t.spec)
-		}
+		r.handlers[t.spec.Name] = t.handler
+		r.specs = append(r.specs, t.spec)
 	}
+}
 
 // GetToolSpecs returns all registered tool definitions.
 func (r *Registry) GetToolSpecs() []api.ToolDefinition {
@@ -168,10 +167,10 @@ func (r *Registry) GetToolSpecs() []api.ToolDefinition {
 }
 
 // ExecuteTool dispatches to the appropriate tool handler.
-func (r *Registry) ExecuteTool(ctx context.Context, name string, input json.RawMessage) (*runtime.ToolOutput, error) {
+func (r *Registry) ExecuteTool(ctx context.Context, name string, input json.RawMessage) (*conventity.ToolOutput, error) {
 	handler, ok := r.handlers[name]
 	if !ok {
-		return &runtime.ToolOutput{
+		return &conventity.ToolOutput{
 			Content: fmt.Sprintf("Unknown tool: %q", name),
 			IsError: true,
 		}, nil
@@ -197,17 +196,17 @@ func (r *Registry) resolvePath(p string) (string, error) {
 
 // --- Tool implementations ---
 
-func (r *Registry) bashTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
+func (r *Registry) bashTool(ctx context.Context, input json.RawMessage) (*conventity.ToolOutput, error) {
 	var args struct {
 		Command         string `json:"command"`
 		Timeout         int    `json:"timeout"`
 		RunInBackground bool   `json:"run_in_background"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
 	}
 	if args.Command == "" {
-		return &runtime.ToolOutput{Content: "command is required", IsError: true}, nil
+		return &conventity.ToolOutput{Content: "command is required", IsError: true}, nil
 	}
 
 	timeout := time.Duration(args.Timeout) * time.Millisecond
@@ -224,7 +223,7 @@ func (r *Registry) bashTool(ctx context.Context, input json.RawMessage) (*runtim
 		// For interactive commands, we can't run them in background
 		// since they need terminal access
 		if isInteractiveCommand(args.Command) {
-			return &runtime.ToolOutput{
+			return &conventity.ToolOutput{
 				Content: "Cannot run interactive commands in background. Interactive commands need terminal access. Remove run_in_background=true for this command.",
 				IsError: true,
 			}, nil
@@ -232,13 +231,13 @@ func (r *Registry) bashTool(ctx context.Context, input json.RawMessage) (*runtim
 
 		jobID, err := r.backgroundCmdManager.Spawn(args.Command, timeout, r.workspaceRoot)
 		if err != nil {
-			return &runtime.ToolOutput{
+			return &conventity.ToolOutput{
 				Content: fmt.Sprintf("Failed to start background command: %v", err),
 				IsError: true,
 			}, nil
 		}
 
-		return &runtime.ToolOutput{
+		return &conventity.ToolOutput{
 			Content: fmt.Sprintf("Command %q started in background (job ID: %s). The command is now running. You can do other work and call bash_result with job_id=%q when you need the output. Use bash_stop to stop the command.", args.Command, jobID, jobID),
 			IsError: false,
 		}, nil
@@ -269,18 +268,18 @@ func (r *Registry) bashTool(ctx context.Context, input json.RawMessage) (*runtim
 		fmt.Println() // separate from next spinner
 
 		if ctx.Err() == context.DeadlineExceeded {
-			return &runtime.ToolOutput{
+			return &conventity.ToolOutput{
 				Content: fmt.Sprintf("Command timed out after %v", timeout),
 				IsError: true,
 			}, nil
 		}
 		if err != nil {
-			return &runtime.ToolOutput{
+			return &conventity.ToolOutput{
 				Content: fmt.Sprintf("Command failed: %v", err),
 				IsError: true,
 			}, nil
 		}
-		return &runtime.ToolOutput{Content: "(command completed)", IsError: false}, nil
+		return &conventity.ToolOutput{Content: "(command completed)", IsError: false}, nil
 	}
 
 	// Standard: capture stdout and stderr
@@ -295,42 +294,42 @@ func (r *Registry) bashTool(ctx context.Context, input json.RawMessage) (*runtim
 	}
 
 	if ctx.Err() == context.DeadlineExceeded {
-		return &runtime.ToolOutput{
+		return &conventity.ToolOutput{
 			Content: fmt.Sprintf("Command timed out after %v\n%s", timeout, output),
 			IsError: true,
 		}, nil
 	}
 
 	if err != nil {
-		return &runtime.ToolOutput{
+		return &conventity.ToolOutput{
 			Content: fmt.Sprintf("Command failed: %v\n%s", err, output),
 			IsError: true,
 		}, nil
 	}
 
-	return &runtime.ToolOutput{Content: output, IsError: false}, nil
+	return &conventity.ToolOutput{Content: output, IsError: false}, nil
 }
 
-func (r *Registry) bashResultTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
+func (r *Registry) bashResultTool(ctx context.Context, input json.RawMessage) (*conventity.ToolOutput, error) {
 	var args struct {
 		JobID string `json:"job_id"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
 	}
 	if args.JobID == "" {
-		return &runtime.ToolOutput{Content: "job_id is required", IsError: true}, nil
+		return &conventity.ToolOutput{Content: "job_id is required", IsError: true}, nil
 	}
 
 	// Check if already in a terminal state first
 	cmd, err := r.backgroundCmdManager.Get(args.JobID)
 	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Job %q not found.", args.JobID), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Job %q not found.", args.JobID), IsError: true}, nil
 	}
 
 	switch cmd.Status {
 	case StatusCancelled:
-		return &runtime.ToolOutput{
+		return &conventity.ToolOutput{
 			Content: fmt.Sprintf("Job %s was cancelled.", args.JobID),
 			IsError: false,
 		}, nil
@@ -339,12 +338,12 @@ func (r *Registry) bashResultTool(ctx context.Context, input json.RawMessage) (*
 		if cmd.Error != nil {
 			errMsg = cmd.Error.Error()
 		}
-		return &runtime.ToolOutput{
+		return &conventity.ToolOutput{
 			Content: fmt.Sprintf("Job %s failed: %s\nOutput: %s", args.JobID, errMsg, cmd.Output),
 			IsError: true,
 		}, nil
 	case StatusCompleted:
-		return &runtime.ToolOutput{
+		return &conventity.ToolOutput{
 			Content: cmd.Output,
 			IsError: false,
 		}, nil
@@ -354,7 +353,7 @@ func (r *Registry) bashResultTool(ctx context.Context, input json.RawMessage) (*
 	// This prevents the LLM from entering a polling loop.
 	result, err := r.backgroundCmdManager.Wait(args.JobID, 5*time.Minute)
 	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Failed to wait for job %s: %v", args.JobID, err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Failed to wait for job %s: %v", args.JobID, err), IsError: true}, nil
 	}
 
 	output := result.GetOutput()
@@ -362,33 +361,33 @@ func (r *Registry) bashResultTool(ctx context.Context, input json.RawMessage) (*
 		output = fmt.Sprintf("Command error: %v\n%s", result.Error, output)
 	}
 
-	return &runtime.ToolOutput{
+	return &conventity.ToolOutput{
 		Content: output,
 		IsError: result.Error != nil,
 	}, nil
 }
 
-func (r *Registry) bashStopTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
+func (r *Registry) bashStopTool(ctx context.Context, input json.RawMessage) (*conventity.ToolOutput, error) {
 	var args struct {
 		JobID string `json:"job_id"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
 	}
 	if args.JobID == "" {
-		return &runtime.ToolOutput{Content: "job_id is required", IsError: true}, nil
+		return &conventity.ToolOutput{Content: "job_id is required", IsError: true}, nil
 	}
 
 	cmd, err := r.backgroundCmdManager.Get(args.JobID)
 	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Job %q not found.", args.JobID), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Job %q not found.", args.JobID), IsError: true}, nil
 	}
 
 	// If already done, return current state
 	if cmd.IsDone() {
 		output := cmd.GetOutput()
 		if cmd.Status == StatusCompleted {
-			return &runtime.ToolOutput{
+			return &conventity.ToolOutput{
 				Content: fmt.Sprintf("Job %s already completed.\nOutput: %s", args.JobID, output),
 				IsError: false,
 			}, nil
@@ -397,20 +396,20 @@ func (r *Registry) bashStopTool(ctx context.Context, input json.RawMessage) (*ru
 		if cmd.Error != nil {
 			errMsg = cmd.Error.Error()
 		}
-		return &runtime.ToolOutput{
+		return &conventity.ToolOutput{
 			Content: fmt.Sprintf("Job %s already %s. Error: %s\nOutput: %s", args.JobID, cmd.Status, errMsg, output),
 			IsError: false,
 		}, nil
 	}
 
 	if err := r.backgroundCmdManager.Stop(args.JobID); err != nil {
-		return &runtime.ToolOutput{
+		return &conventity.ToolOutput{
 			Content: fmt.Sprintf("Failed to stop job %s: %v", args.JobID, err),
 			IsError: true,
 		}, nil
 	}
 
-	return &runtime.ToolOutput{
+	return &conventity.ToolOutput{
 		Content: fmt.Sprintf("Job %s has been stopped.", args.JobID),
 		IsError: false,
 	}, nil
@@ -443,82 +442,82 @@ func isInteractiveCommand(cmd string) bool {
 	return false
 }
 
-func (r *Registry) readFileTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
+func (r *Registry) readFileTool(ctx context.Context, input json.RawMessage) (*conventity.ToolOutput, error) {
 	var args struct {
 		Path string `json:"path"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
 	}
 
 	resolved, err := r.resolvePath(args.Path)
 	if err != nil {
-		return &runtime.ToolOutput{Content: "Invalid path: " + err.Error(), IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Invalid path: " + err.Error(), IsError: true}, nil
 	}
 
 	data, err := os.ReadFile(resolved)
 	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Failed to read %s: %v", args.Path, err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Failed to read %s: %v", args.Path, err), IsError: true}, nil
 	}
 
-	return &runtime.ToolOutput{Content: string(data), IsError: false}, nil
+	return &conventity.ToolOutput{Content: string(data), IsError: false}, nil
 }
 
-func (r *Registry) writeFileTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
+func (r *Registry) writeFileTool(ctx context.Context, input json.RawMessage) (*conventity.ToolOutput, error) {
 	var args struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
 	}
 
 	resolved, err := r.resolvePath(args.Path)
 	if err != nil {
-		return &runtime.ToolOutput{Content: "Invalid path: " + err.Error(), IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Invalid path: " + err.Error(), IsError: true}, nil
 	}
 
 	if err := os.MkdirAll(filepath.Dir(resolved), 0o755); err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Failed to create directories: %v", err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Failed to create directories: %v", err), IsError: true}, nil
 	}
 
 	if err := os.WriteFile(resolved, []byte(args.Content), 0o644); err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Failed to write %s: %v", args.Path, err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Failed to write %s: %v", args.Path, err), IsError: true}, nil
 	}
 
-	return &runtime.ToolOutput{Content: fmt.Sprintf("Wrote %d bytes to %s", len(args.Content), args.Path), IsError: false}, nil
+	return &conventity.ToolOutput{Content: fmt.Sprintf("Wrote %d bytes to %s", len(args.Content), args.Path), IsError: false}, nil
 }
 
-func (r *Registry) editFileTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
+func (r *Registry) editFileTool(ctx context.Context, input json.RawMessage) (*conventity.ToolOutput, error) {
 	var args struct {
 		Path      string `json:"path"`
 		OldString string `json:"old_string"`
 		NewString string `json:"new_string"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
 	}
 
 	resolved, err := r.resolvePath(args.Path)
 	if err != nil {
-		return &runtime.ToolOutput{Content: "Invalid path: " + err.Error(), IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Invalid path: " + err.Error(), IsError: true}, nil
 	}
 
 	data, err := os.ReadFile(resolved)
 	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Failed to read %s: %v", args.Path, err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Failed to read %s: %v", args.Path, err), IsError: true}, nil
 	}
 
 	content := string(data)
 	count := strings.Count(content, args.OldString)
 	if count == 0 {
-		return &runtime.ToolOutput{
+		return &conventity.ToolOutput{
 			Content: fmt.Sprintf("old_string not found in %s", args.Path),
 			IsError: true,
 		}, nil
 	}
 	if count > 1 {
-		return &runtime.ToolOutput{
+		return &conventity.ToolOutput{
 			Content: fmt.Sprintf("old_string found %d times in %s; must be unique", count, args.Path),
 			IsError: true,
 		}, nil
@@ -526,21 +525,21 @@ func (r *Registry) editFileTool(ctx context.Context, input json.RawMessage) (*ru
 
 	newContent := strings.Replace(content, args.OldString, args.NewString, 1)
 	if err := os.WriteFile(resolved, []byte(newContent), 0o644); err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Failed to write %s: %v", args.Path, err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Failed to write %s: %v", args.Path, err), IsError: true}, nil
 	}
 
-	return &runtime.ToolOutput{
+	return &conventity.ToolOutput{
 		Content: fmt.Sprintf("Edited %s (replaced 1 occurrence)", args.Path),
 		IsError: false,
 	}, nil
 }
 
-func (r *Registry) globSearchTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
+func (r *Registry) globSearchTool(ctx context.Context, input json.RawMessage) (*conventity.ToolOutput, error) {
 	var args struct {
 		Pattern string `json:"pattern"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
 	}
 
 	searchDir := r.workspaceRoot
@@ -550,31 +549,31 @@ func (r *Registry) globSearchTool(ctx context.Context, input json.RawMessage) (*
 
 	matches, err := filepath.Glob(args.Pattern)
 	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Invalid pattern: %v", err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Invalid pattern: %v", err), IsError: true}, nil
 	}
 
 	if len(matches) == 0 {
-		return &runtime.ToolOutput{Content: "No files matched the pattern.", IsError: false}, nil
+		return &conventity.ToolOutput{Content: "No files matched the pattern.", IsError: false}, nil
 	}
 
-	return &runtime.ToolOutput{
+	return &conventity.ToolOutput{
 		Content: strings.Join(matches, "\n"),
 		IsError: false,
 	}, nil
 }
 
-func (r *Registry) grepSearchTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
+func (r *Registry) grepSearchTool(ctx context.Context, input json.RawMessage) (*conventity.ToolOutput, error) {
 	var args struct {
 		Pattern string `json:"pattern"`
 		Path    string `json:"path"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
 	}
 
 	re, err := regexp.Compile(args.Pattern)
 	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Invalid regex: %v", err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Invalid regex: %v", err), IsError: true}, nil
 	}
 
 	searchPath := args.Path
@@ -583,7 +582,7 @@ func (r *Registry) grepSearchTool(ctx context.Context, input json.RawMessage) (*
 	} else {
 		searchPath, err = r.resolvePath(searchPath)
 		if err != nil {
-			return &runtime.ToolOutput{Content: "Invalid path: " + err.Error(), IsError: true}, nil
+			return &conventity.ToolOutput{Content: "Invalid path: " + err.Error(), IsError: true}, nil
 		}
 	}
 
@@ -591,13 +590,13 @@ func (r *Registry) grepSearchTool(ctx context.Context, input json.RawMessage) (*
 
 	info, err := os.Stat(searchPath)
 	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Path not found: %v", err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Path not found: %v", err), IsError: true}, nil
 	}
 
 	if !info.IsDir() {
 		matches, err := grepFile(searchPath, re)
 		if err != nil {
-			return &runtime.ToolOutput{Content: err.Error(), IsError: true}, nil
+			return &conventity.ToolOutput{Content: err.Error(), IsError: true}, nil
 		}
 		results = matches
 	} else {
@@ -618,10 +617,10 @@ func (r *Registry) grepSearchTool(ctx context.Context, input json.RawMessage) (*
 	}
 
 	if len(results) == 0 {
-		return &runtime.ToolOutput{Content: "No matches found.", IsError: false}, nil
+		return &conventity.ToolOutput{Content: "No matches found.", IsError: false}, nil
 	}
 
-	return &runtime.ToolOutput{
+	return &conventity.ToolOutput{
 		Content: strings.Join(results, "\n"),
 		IsError: false,
 	}, nil
@@ -646,16 +645,16 @@ func grepFile(path string, re *regexp.Regexp) ([]string, error) {
 	return results, scanner.Err()
 }
 
-func (r *Registry) webFetchTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
+func (r *Registry) webFetchTool(ctx context.Context, input json.RawMessage) (*conventity.ToolOutput, error) {
 	var args struct {
 		URL     string `json:"url"`
 		Timeout int    `json:"timeout"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
 	}
 	if args.URL == "" {
-		return &runtime.ToolOutput{Content: "url is required", IsError: true}, nil
+		return &conventity.ToolOutput{Content: "url is required", IsError: true}, nil
 	}
 
 	timeout := time.Duration(args.Timeout) * time.Second
@@ -668,55 +667,55 @@ func (r *Registry) webFetchTool(ctx context.Context, input json.RawMessage) (*ru
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, args.URL, nil)
 	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Invalid URL: %v", err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Invalid URL: %v", err), IsError: true}, nil
 	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Request failed: %v", err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Request failed: %v", err), IsError: true}, nil
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024)) // 10KB limit
 	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Read failed: %v", err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Read failed: %v", err), IsError: true}, nil
 	}
 
-	return &runtime.ToolOutput{Content: string(body), IsError: false}, nil
+	return &conventity.ToolOutput{Content: string(body), IsError: false}, nil
 }
 
 // --- New tool implementations ---
 
-func (r *Registry) webSearchTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
+func (r *Registry) webSearchTool(ctx context.Context, input json.RawMessage) (*conventity.ToolOutput, error) {
 	var args struct {
 		Query          string   `json:"query"`
 		AllowedDomains []string `json:"allowed_domains"`
 		BlockedDomains []string `json:"blocked_domains"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
 	}
 	if args.Query == "" {
-		return &runtime.ToolOutput{Content: "query is required", IsError: true}, nil
+		return &conventity.ToolOutput{Content: "query is required", IsError: true}, nil
 	}
 
 	searchURL := "https://html.duckduckgo.com/html/?q=" + url.QueryEscape(args.Query)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL, nil)
 	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Invalid search URL: %v", err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Invalid search URL: %v", err), IsError: true}, nil
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; GlawCode/1.0)")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Search request failed: %v", err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Search request failed: %v", err), IsError: true}, nil
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 100*1024)) // 100KB limit
 	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Read failed: %v", err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Read failed: %v", err), IsError: true}, nil
 	}
 
 	results := parseDuckDuckGoHTML(string(body))
@@ -746,7 +745,7 @@ func (r *Registry) webSearchTool(ctx context.Context, input json.RawMessage) (*r
 	results = filtered
 
 	if len(results) == 0 {
-		return &runtime.ToolOutput{Content: "No search results found.", IsError: false}, nil
+		return &conventity.ToolOutput{Content: "No search results found.", IsError: false}, nil
 	}
 
 	var sb strings.Builder
@@ -757,7 +756,7 @@ func (r *Registry) webSearchTool(ctx context.Context, input json.RawMessage) (*r
 		sb.WriteString(fmt.Sprintf("[%d] %s\n%s\n%s", i+1, r.Title, r.URL, r.Snippet))
 	}
 
-	return &runtime.ToolOutput{Content: sb.String(), IsError: false}, nil
+	return &conventity.ToolOutput{Content: sb.String(), IsError: false}, nil
 }
 
 // searchResult holds a parsed DuckDuckGo result.
@@ -847,7 +846,7 @@ func extractDomain(rawURL string) string {
 	return u.Hostname()
 }
 
-func (r *Registry) todoWriteTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
+func (r *Registry) todoWriteTool(ctx context.Context, input json.RawMessage) (*conventity.ToolOutput, error) {
 	var args struct {
 		Todos []struct {
 			ID          string `json:"id"`
@@ -857,43 +856,43 @@ func (r *Registry) todoWriteTool(ctx context.Context, input json.RawMessage) (*r
 		} `json:"todos"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
 	}
 	if len(args.Todos) == 0 {
-		return &runtime.ToolOutput{Content: "todos array must not be empty", IsError: true}, nil
+		return &conventity.ToolOutput{Content: "todos array must not be empty", IsError: true}, nil
 	}
 
 	// Ensure the .glaw directory exists.
 	glawDir := filepath.Join(r.workspaceRoot, ".glaw")
 	if err := os.MkdirAll(glawDir, 0o755); err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Failed to create .glaw directory: %v", err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Failed to create .glaw directory: %v", err), IsError: true}, nil
 	}
 
 	data, err := json.MarshalIndent(args.Todos, "", "  ")
 	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Failed to marshal todos: %v", err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Failed to marshal todos: %v", err), IsError: true}, nil
 	}
 
 	todoPath := filepath.Join(glawDir, "todos.json")
 	if err := os.WriteFile(todoPath, data, 0o644); err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Failed to write todos: %v", err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Failed to write todos: %v", err), IsError: true}, nil
 	}
 
-	return &runtime.ToolOutput{
+	return &conventity.ToolOutput{
 		Content: fmt.Sprintf("Wrote %d todos to .glaw/todos.json", len(args.Todos)),
 		IsError: false,
 	}, nil
 }
 
-func (r *Registry) toolSearchTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
+func (r *Registry) toolSearchTool(ctx context.Context, input json.RawMessage) (*conventity.ToolOutput, error) {
 	var args struct {
 		Query string `json:"query"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
 	}
 	if args.Query == "" {
-		return &runtime.ToolOutput{Content: "query is required", IsError: true}, nil
+		return &conventity.ToolOutput{Content: "query is required", IsError: true}, nil
 	}
 
 	queryLower := strings.ToLower(args.Query)
@@ -913,7 +912,7 @@ func (r *Registry) toolSearchTool(ctx context.Context, input json.RawMessage) (*
 	}
 
 	if len(matches) == 0 {
-		return &runtime.ToolOutput{Content: "No tools matched the query.", IsError: false}, nil
+		return &conventity.ToolOutput{Content: "No tools matched the query.", IsError: false}, nil
 	}
 
 	sort.Slice(matches, func(i, j int) bool {
@@ -925,23 +924,23 @@ func (r *Registry) toolSearchTool(ctx context.Context, input json.RawMessage) (*
 		sb.WriteString(fmt.Sprintf("- %s (%s)\n", m.name, m.reason))
 	}
 
-	return &runtime.ToolOutput{Content: strings.TrimSpace(sb.String()), IsError: false}, nil
+	return &conventity.ToolOutput{Content: strings.TrimSpace(sb.String()), IsError: false}, nil
 }
 
-func (r *Registry) subAgentTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
+func (r *Registry) subAgentTool(ctx context.Context, input json.RawMessage) (*conventity.ToolOutput, error) {
 	var args struct {
 		AgentName string `json:"agent_name"`
 		Prompt    string `json:"prompt"`
 		Wait      *bool  `json:"wait"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
 	}
 	if args.AgentName == "" {
-		return &runtime.ToolOutput{Content: "agent_name is required", IsError: true}, nil
+		return &conventity.ToolOutput{Content: "agent_name is required", IsError: true}, nil
 	}
 	if args.Prompt == "" {
-		return &runtime.ToolOutput{Content: "prompt is required", IsError: true}, nil
+		return &conventity.ToolOutput{Content: "prompt is required", IsError: true}, nil
 	}
 
 	wait := false
@@ -950,16 +949,16 @@ func (r *Registry) subAgentTool(ctx context.Context, input json.RawMessage) (*ru
 	}
 
 	if r.orchestrator == nil {
-		return &runtime.ToolOutput{Content: "Sub-agent orchestrator not configured", IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Sub-agent orchestrator not configured", IsError: true}, nil
 	}
 
 	task, err := r.orchestrator.SpawnTask(ctx, args.AgentName, args.Prompt)
 	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Failed to spawn sub-agent: %v", err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Failed to spawn sub-agent: %v", err), IsError: true}, nil
 	}
 
 	if !wait {
-		return &runtime.ToolOutput{
+		return &conventity.ToolOutput{
 			Content: fmt.Sprintf("Sub-agent %q spawned in background (job ID: %s). The agent is now running. You can do other work and call sub_agent_result with job_id=%q when you need the output.", args.AgentName, task.ID, task.ID),
 			IsError: false,
 		}, nil
@@ -967,7 +966,7 @@ func (r *Registry) subAgentTool(ctx context.Context, input json.RawMessage) (*ru
 
 	result, err := r.orchestrator.WaitTask(task.ID)
 	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Sub-agent task failed: %v", err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Sub-agent task failed: %v", err), IsError: true}, nil
 	}
 
 	isError := result.Error != nil
@@ -976,36 +975,36 @@ func (r *Registry) subAgentTool(ctx context.Context, input json.RawMessage) (*ru
 		output = fmt.Sprintf("Sub-agent error: %v\n%s", result.Error, output)
 	}
 
-	return &runtime.ToolOutput{
+	return &conventity.ToolOutput{
 		Content: output,
 		IsError: isError,
 	}, nil
 }
 
-func (r *Registry) subAgentResultTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
+func (r *Registry) subAgentResultTool(ctx context.Context, input json.RawMessage) (*conventity.ToolOutput, error) {
 	var args struct {
 		JobID string `json:"job_id"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
 	}
 	if args.JobID == "" {
-		return &runtime.ToolOutput{Content: "job_id is required", IsError: true}, nil
+		return &conventity.ToolOutput{Content: "job_id is required", IsError: true}, nil
 	}
 
 	if r.orchestrator == nil {
-		return &runtime.ToolOutput{Content: "Sub-agent orchestrator not configured", IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Sub-agent orchestrator not configured", IsError: true}, nil
 	}
 
 	// Check if already in a terminal state first
 	task, err := r.orchestrator.GetTask(args.JobID)
 	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Job %q not found.", args.JobID), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Job %q not found.", args.JobID), IsError: true}, nil
 	}
 
 	switch task.Status {
 	case "cancelled":
-		return &runtime.ToolOutput{
+		return &conventity.ToolOutput{
 			Content: fmt.Sprintf("Job %s was cancelled.", args.JobID),
 			IsError: false,
 		}, nil
@@ -1014,18 +1013,18 @@ func (r *Registry) subAgentResultTool(ctx context.Context, input json.RawMessage
 		if task.Result != nil && task.Result.Error != nil {
 			errMsg = task.Result.Error.Error()
 		}
-		return &runtime.ToolOutput{
+		return &conventity.ToolOutput{
 			Content: fmt.Sprintf("Job %s failed: %s", args.JobID, errMsg),
 			IsError: true,
 		}, nil
 	case "completed":
 		if task.Result != nil {
-			return &runtime.ToolOutput{
+			return &conventity.ToolOutput{
 				Content: task.Result.Output,
 				IsError: false,
 			}, nil
 		}
-		return &runtime.ToolOutput{
+		return &conventity.ToolOutput{
 			Content: fmt.Sprintf("Job %s completed with no output.", args.JobID),
 			IsError: false,
 		}, nil
@@ -1035,7 +1034,7 @@ func (r *Registry) subAgentResultTool(ctx context.Context, input json.RawMessage
 	// This prevents the LLM from entering a polling loop.
 	result, err := r.orchestrator.WaitTask(args.JobID)
 	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Job %s failed: %v", args.JobID, err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Job %s failed: %v", args.JobID, err), IsError: true}, nil
 	}
 
 	output := result.Output
@@ -1043,19 +1042,19 @@ func (r *Registry) subAgentResultTool(ctx context.Context, input json.RawMessage
 		output = fmt.Sprintf("Sub-agent error: %v\n%s", result.Error, output)
 	}
 
-	return &runtime.ToolOutput{
+	return &conventity.ToolOutput{
 		Content: output,
 		IsError: result.Error != nil,
 	}, nil
 }
 
-func (r *Registry) analyzeTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
+func (r *Registry) analyzeTool(ctx context.Context, input json.RawMessage) (*conventity.ToolOutput, error) {
 	var args struct {
 		Mode   string `json:"mode"`
 		Format string `json:"format"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
 	}
 	if args.Mode == "" {
 		args.Mode = "full"
@@ -1071,31 +1070,31 @@ func (r *Registry) analyzeTool(ctx context.Context, input json.RawMessage) (*run
 	case "summary":
 		cached, err := loadAnalysis(analysisPath)
 		if err == nil && cached != nil {
-			return &runtime.ToolOutput{
+			return &conventity.ToolOutput{
 				Content: fmt.Sprintf("Project Summary (cached from %s):\n\n%s", cached.Timestamp, cached.FormatSummary()),
 				IsError: false,
 			}, nil
 		}
 		result := r.performAnalysis()
 		if result == nil {
-			return &runtime.ToolOutput{Content: "Analysis produced no results.", IsError: true}, nil
+			return &conventity.ToolOutput{Content: "Analysis produced no results.", IsError: true}, nil
 		}
-		return &runtime.ToolOutput{Content: result.FormatSummary(), IsError: false}, nil
+		return &conventity.ToolOutput{Content: result.FormatSummary(), IsError: false}, nil
 
 	case "graph":
 		result := r.performAnalysis()
 		if result == nil {
-			return &runtime.ToolOutput{Content: "Analysis produced no results.", IsError: true}, nil
+			return &conventity.ToolOutput{Content: "Analysis produced no results.", IsError: true}, nil
 		}
 		if err := result.Save(analysisPath); err != nil {
-			return &runtime.ToolOutput{Content: fmt.Sprintf("Failed to save analysis: %v", err), IsError: true}, nil
+			return &conventity.ToolOutput{Content: fmt.Sprintf("Failed to save analysis: %v", err), IsError: true}, nil
 		}
-		return &runtime.ToolOutput{Content: result.FormatGraph(args.Format), IsError: false}, nil
+		return &conventity.ToolOutput{Content: result.FormatGraph(args.Format), IsError: false}, nil
 
 	case "full", "":
 		result := r.performAnalysis()
 		if result == nil {
-			return &runtime.ToolOutput{Content: "Analysis produced no results.", IsError: true}, nil
+			return &conventity.ToolOutput{Content: "Analysis produced no results.", IsError: true}, nil
 		}
 		_ = result.Save(analysisPath) //nolint:errcheck // best-effort cache save
 		output := result.FormatSummary()
@@ -1105,10 +1104,10 @@ func (r *Registry) analyzeTool(ctx context.Context, input json.RawMessage) (*run
 			output += "\n" + result.FormatGraph(args.Format)
 		}
 		output += "\nAnalysis saved to .glaw/analysis.json\n"
-		return &runtime.ToolOutput{Content: output, IsError: false}, nil
+		return &conventity.ToolOutput{Content: output, IsError: false}, nil
 
 	default:
-		return &runtime.ToolOutput{
+		return &conventity.ToolOutput{
 			Content: fmt.Sprintf("Invalid mode %q; must be full, summary, or graph", args.Mode),
 			IsError: true,
 		}, nil
@@ -1119,13 +1118,13 @@ func (r *Registry) analyzeTool(ctx context.Context, input json.RawMessage) (*run
 
 // analysisResult holds the complete analysis of a project.
 type analysisResult struct {
-	Timestamp    string             `json:"timestamp"`
-	RootPath     string             `json:"root_path"`
-	Summary      analysisSummary    `json:"summary"`
-	Modules      []moduleInfo       `json:"modules"`
-	Dependencies []dependency       `json:"dependencies"`
-	FileTypes    []fileTypeStat     `json:"file_types"`
-	Graph        analysisGraph      `json:"graph"`
+	Timestamp    string          `json:"timestamp"`
+	RootPath     string          `json:"root_path"`
+	Summary      analysisSummary `json:"summary"`
+	Modules      []moduleInfo    `json:"modules"`
+	Dependencies []dependency    `json:"dependencies"`
+	FileTypes    []fileTypeStat  `json:"file_types"`
+	Graph        analysisGraph   `json:"graph"`
 }
 
 type analysisSummary struct {
@@ -1177,9 +1176,9 @@ type dependency struct {
 }
 
 type fileTypeStat struct {
-	Extension string  `json:"extension"`
-	Count     int     `json:"count"`
-	Lines     int     `json:"lines"`
+	Extension  string  `json:"extension"`
+	Count      int     `json:"count"`
+	Lines      int     `json:"lines"`
 	Percentage float64 `json:"percentage"`
 }
 
@@ -1193,23 +1192,23 @@ type analysisGraph struct {
 
 // langRules defines per-language rules for import scanning, test detection, etc.
 var langRules = map[string]struct {
-	Extensions      []string
-	TestPatterns    []string
-	CommentLine     []string
-	CommentBlockO   []string // block comment open
-	CommentBlockC   []string // block comment close
-	ImportRegex     string
-	ModuleFile      string
-	ProjectFile     string // top-level project manifest
+	Extensions    []string
+	TestPatterns  []string
+	CommentLine   []string
+	CommentBlockO []string // block comment open
+	CommentBlockC []string // block comment close
+	ImportRegex   string
+	ModuleFile    string
+	ProjectFile   string // top-level project manifest
 }{
 	"go": {
-		Extensions:   []string{".go"},
-		TestPatterns: []string{"_test.go"},
-		CommentLine:  []string{"//"},
+		Extensions:    []string{".go"},
+		TestPatterns:  []string{"_test.go"},
+		CommentLine:   []string{"//"},
 		CommentBlockO: []string{"/*"},
 		CommentBlockC: []string{"*/"},
-		ImportRegex:  `(?m)^\s*"\s*([^"]+)"\s*$`,
-		ModuleFile:   "go.mod",
+		ImportRegex:   `(?m)^\s*"\s*([^"]+)"\s*$`,
+		ModuleFile:    "go.mod",
 	},
 	"python": {
 		Extensions:   []string{".py", ".pyw"},
@@ -1219,37 +1218,37 @@ var langRules = map[string]struct {
 		ProjectFile:  "pyproject.toml",
 	},
 	"javascript": {
-		Extensions:   []string{".js", ".mjs", ".cjs"},
-		TestPatterns: []string{".test.", ".spec."},
-		CommentLine:  []string{"//"},
+		Extensions:    []string{".js", ".mjs", ".cjs"},
+		TestPatterns:  []string{".test.", ".spec."},
+		CommentLine:   []string{"//"},
 		CommentBlockO: []string{"/*"},
 		CommentBlockC: []string{"*/"},
-		ImportRegex:  `(?:require\(|import\s+.*?\s+from\s+|import\s+)['"]([^./][^'"]*)['"]`,
+		ImportRegex:   `(?:require\(|import\s+.*?\s+from\s+|import\s+)['"]([^./][^'"]*)['"]`,
 	},
 	"typescript": {
-		Extensions:   []string{".ts", ".tsx", ".cts", ".mts"},
-		TestPatterns: []string{".test.", ".spec."},
-		CommentLine:  []string{"//"},
+		Extensions:    []string{".ts", ".tsx", ".cts", ".mts"},
+		TestPatterns:  []string{".test.", ".spec."},
+		CommentLine:   []string{"//"},
 		CommentBlockO: []string{"/*"},
 		CommentBlockC: []string{"*/"},
-		ImportRegex:  `(?:require\(|import\s+.*?\s+from\s+|import\s+)['"]([^./][^'"]*)['"]`,
+		ImportRegex:   `(?:require\(|import\s+.*?\s+from\s+|import\s+)['"]([^./][^'"]*)['"]`,
 	},
 	"rust": {
-		Extensions:   []string{".rs"},
-		TestPatterns: []string{},
-		CommentLine:  []string{"//", "///", "//!"},
+		Extensions:    []string{".rs"},
+		TestPatterns:  []string{},
+		CommentLine:   []string{"//", "///", "//!"},
 		CommentBlockO: []string{"/*", "/*!"},
 		CommentBlockC: []string{"*/"},
-		ImportRegex:  `(?m)^\s*(?:use|pub\s+use)\s+([^;{]+)`,
-		ModuleFile:   "Cargo.toml",
+		ImportRegex:   `(?m)^\s*(?:use|pub\s+use)\s+([^;{]+)`,
+		ModuleFile:    "Cargo.toml",
 	},
 	"java": {
-		Extensions:   []string{".java"},
-		TestPatterns: []string{"Test.java", "Tests.java", "IT.java"},
-		CommentLine:  []string{"//"},
+		Extensions:    []string{".java"},
+		TestPatterns:  []string{"Test.java", "Tests.java", "IT.java"},
+		CommentLine:   []string{"//"},
 		CommentBlockO: []string{"/*", "/**"},
 		CommentBlockC: []string{"*/"},
-		ImportRegex:  `(?m)^\s*import\s+(?:static\s+)?([^;]+)`,
+		ImportRegex:   `(?m)^\s*import\s+(?:static\s+)?([^;]+)`,
 	},
 	"ruby": {
 		Extensions:   []string{".rb", ".rake"},
@@ -1258,52 +1257,52 @@ var langRules = map[string]struct {
 		ImportRegex:  `(?m)^\s*(?:require|require_relative|gem)\s+['"]([^'"]+)['"]`,
 	},
 	"csharp": {
-		Extensions:   []string{".cs"},
-		TestPatterns: []string{"Test.cs", "Tests.cs"},
-		CommentLine:  []string{"//"},
+		Extensions:    []string{".cs"},
+		TestPatterns:  []string{"Test.cs", "Tests.cs"},
+		CommentLine:   []string{"//"},
 		CommentBlockO: []string{"/*"},
 		CommentBlockC: []string{"*/"},
-		ImportRegex:  `(?m)^\s*using\s+([^;]+)`,
+		ImportRegex:   `(?m)^\s*using\s+([^;]+)`,
 	},
 	"cpp": {
-		Extensions:   []string{".cpp", ".cc", ".cxx", ".c", ".h", ".hpp", ".hxx"},
-		TestPatterns: []string{"_test.", "test_"},
-		CommentLine:  []string{"//"},
+		Extensions:    []string{".cpp", ".cc", ".cxx", ".c", ".h", ".hpp", ".hxx"},
+		TestPatterns:  []string{"_test.", "test_"},
+		CommentLine:   []string{"//"},
 		CommentBlockO: []string{"/*"},
 		CommentBlockC: []string{"*/"},
-		ImportRegex:  `(?m)^\s*#\s*include\s*[<"]([^>"]+)[>"]`,
+		ImportRegex:   `(?m)^\s*#\s*include\s*[<"]([^>"]+)[>"]`,
 	},
 	"swift": {
-		Extensions:   []string{".swift"},
-		TestPatterns: []string{"Tests.swift", "Test.swift"},
-		CommentLine:  []string{"//"},
+		Extensions:    []string{".swift"},
+		TestPatterns:  []string{"Tests.swift", "Test.swift"},
+		CommentLine:   []string{"//"},
 		CommentBlockO: []string{"/*"},
 		CommentBlockC: []string{"*/"},
-		ImportRegex:  `(?m)^\s*import\s+(\w+)`,
+		ImportRegex:   `(?m)^\s*import\s+(\w+)`,
 	},
 	"kotlin": {
-		Extensions:   []string{".kt", ".kts"},
-		TestPatterns: []string{"Test.kt", "Tests.kt"},
-		CommentLine:  []string{"//"},
+		Extensions:    []string{".kt", ".kts"},
+		TestPatterns:  []string{"Test.kt", "Tests.kt"},
+		CommentLine:   []string{"//"},
 		CommentBlockO: []string{"/*"},
 		CommentBlockC: []string{"*/"},
-		ImportRegex:  `(?m)^\s*import\s+([^;]+)`,
+		ImportRegex:   `(?m)^\s*import\s+([^;]+)`,
 	},
 	"php": {
-		Extensions:   []string{".php"},
-		TestPatterns: []string{"Test.php", "Tests.php"},
-		CommentLine:  []string{"//", "#"},
+		Extensions:    []string{".php"},
+		TestPatterns:  []string{"Test.php", "Tests.php"},
+		CommentLine:   []string{"//", "#"},
 		CommentBlockO: []string{"/*"},
 		CommentBlockC: []string{"*/"},
-		ImportRegex:  `(?m)^\s*(?:use|require|require_once|include|include_once)\s+[^;]*['"]([^'"]+)['"]`,
+		ImportRegex:   `(?m)^\s*(?:use|require|require_once|include|include_once)\s+[^;]*['"]([^'"]+)['"]`,
 	},
 	"scala": {
-		Extensions:   []string{".scala"},
-		TestPatterns: []string{"Spec.scala", "Test.scala"},
-		CommentLine:  []string{"//"},
+		Extensions:    []string{".scala"},
+		TestPatterns:  []string{"Spec.scala", "Test.scala"},
+		CommentLine:   []string{"//"},
 		CommentBlockO: []string{"/*"},
 		CommentBlockC: []string{"*/"},
-		ImportRegex:  `(?m)^\s*import\s+([^;{]+)`,
+		ImportRegex:   `(?m)^\s*import\s+([^;{]+)`,
 	},
 }
 
@@ -1725,7 +1724,10 @@ func (r *Registry) performAnalysis() *analysisResult {
 			langCounts[lang] += ft.Count
 		}
 	}
-	type langCount struct{ lang string; count int }
+	type langCount struct {
+		lang  string
+		count int
+	}
 	var lcs []langCount
 	for l, c := range langCounts {
 		lcs = append(lcs, langCount{l, c})
@@ -2010,18 +2012,42 @@ func (r *analysisResult) FormatSummary() string {
 	sb.WriteString("\n")
 
 	sb.WriteString("── Infrastructure ─────────────────────────\n")
-	if s.HasGoMod { sb.WriteString("  ✓ go.mod\n") }
-	if s.HasPackageJSON { sb.WriteString("  ✓ package.json\n") }
-	if s.HasPipRequirements { sb.WriteString("  ✓ requirements.txt\n") }
-	if s.HasPyprojectToml { sb.WriteString("  ✓ pyproject.toml\n") }
-	if s.HasCargoToml { sb.WriteString("  ✓ Cargo.toml\n") }
-	if s.HasPomXml { sb.WriteString("  ✓ pom.xml\n") }
-	if s.HasBuildGradle { sb.WriteString("  ✓ build.gradle\n") }
-	if s.HasGemfile { sb.WriteString("  ✓ Gemfile\n") }
-	if s.HasCSProj { sb.WriteString("  ✓ .csproj\n") }
-	if s.HasDockerfile { sb.WriteString("  ✓ Dockerfile\n") }
-	if s.HasMakefile { sb.WriteString("  ✓ Makefile\n") }
-	if s.HasCI { sb.WriteString("  ✓ CI Config\n") }
+	if s.HasGoMod {
+		sb.WriteString("  ✓ go.mod\n")
+	}
+	if s.HasPackageJSON {
+		sb.WriteString("  ✓ package.json\n")
+	}
+	if s.HasPipRequirements {
+		sb.WriteString("  ✓ requirements.txt\n")
+	}
+	if s.HasPyprojectToml {
+		sb.WriteString("  ✓ pyproject.toml\n")
+	}
+	if s.HasCargoToml {
+		sb.WriteString("  ✓ Cargo.toml\n")
+	}
+	if s.HasPomXml {
+		sb.WriteString("  ✓ pom.xml\n")
+	}
+	if s.HasBuildGradle {
+		sb.WriteString("  ✓ build.gradle\n")
+	}
+	if s.HasGemfile {
+		sb.WriteString("  ✓ Gemfile\n")
+	}
+	if s.HasCSProj {
+		sb.WriteString("  ✓ .csproj\n")
+	}
+	if s.HasDockerfile {
+		sb.WriteString("  ✓ Dockerfile\n")
+	}
+	if s.HasMakefile {
+		sb.WriteString("  ✓ Makefile\n")
+	}
+	if s.HasCI {
+		sb.WriteString("  ✓ CI Config\n")
+	}
 	sb.WriteString("\n")
 
 	if len(r.Modules) > 0 {
@@ -2093,7 +2119,7 @@ func loadAnalysis(path string) (*analysisResult, error) {
 	return &result, nil
 }
 
-func (r *Registry) notebookEditTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
+func (r *Registry) notebookEditTool(ctx context.Context, input json.RawMessage) (*conventity.ToolOutput, error) {
 	var args struct {
 		NotebookPath string `json:"notebook_path"`
 		CellID       string `json:"cell_id"`
@@ -2102,49 +2128,49 @@ func (r *Registry) notebookEditTool(ctx context.Context, input json.RawMessage) 
 		EditMode     string `json:"edit_mode"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
 	}
 	if args.NotebookPath == "" {
-		return &runtime.ToolOutput{Content: "notebook_path is required", IsError: true}, nil
+		return &conventity.ToolOutput{Content: "notebook_path is required", IsError: true}, nil
 	}
 	if args.EditMode == "" {
-		return &runtime.ToolOutput{Content: "edit_mode is required", IsError: true}, nil
+		return &conventity.ToolOutput{Content: "edit_mode is required", IsError: true}, nil
 	}
 
 	resolved, err := r.resolvePath(args.NotebookPath)
 	if err != nil {
-		return &runtime.ToolOutput{Content: "Invalid path: " + err.Error(), IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Invalid path: " + err.Error(), IsError: true}, nil
 	}
 
 	// Read the notebook file.
 	data, err := os.ReadFile(resolved)
 	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Failed to read notebook: %v", err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Failed to read notebook: %v", err), IsError: true}, nil
 	}
 
 	var nb map[string]json.RawMessage
 	if err := json.Unmarshal(data, &nb); err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Invalid notebook format: %v", err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Invalid notebook format: %v", err), IsError: true}, nil
 	}
 
 	cellsRaw, ok := nb["cells"]
 	if !ok {
-		return &runtime.ToolOutput{Content: "Notebook has no cells array", IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Notebook has no cells array", IsError: true}, nil
 	}
 
 	var cells []map[string]interface{}
 	if err := json.Unmarshal(cellsRaw, &cells); err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Invalid cells format: %v", err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Invalid cells format: %v", err), IsError: true}, nil
 	}
 
 	switch args.EditMode {
 	case "replace":
 		if args.CellID == "" {
-			return &runtime.ToolOutput{Content: "cell_id is required for replace mode", IsError: true}, nil
+			return &conventity.ToolOutput{Content: "cell_id is required for replace mode", IsError: true}, nil
 		}
 		idx := findCellByID(cells, args.CellID)
 		if idx < 0 {
-			return &runtime.ToolOutput{Content: fmt.Sprintf("Cell with id %q not found", args.CellID), IsError: true}, nil
+			return &conventity.ToolOutput{Content: fmt.Sprintf("Cell with id %q not found", args.CellID), IsError: true}, nil
 		}
 		cells[idx]["source"] = args.NewSource
 		if args.CellType != "" {
@@ -2181,16 +2207,16 @@ func (r *Registry) notebookEditTool(ctx context.Context, input json.RawMessage) 
 
 	case "delete":
 		if args.CellID == "" {
-			return &runtime.ToolOutput{Content: "cell_id is required for delete mode", IsError: true}, nil
+			return &conventity.ToolOutput{Content: "cell_id is required for delete mode", IsError: true}, nil
 		}
 		idx := findCellByID(cells, args.CellID)
 		if idx < 0 {
-			return &runtime.ToolOutput{Content: fmt.Sprintf("Cell with id %q not found", args.CellID), IsError: true}, nil
+			return &conventity.ToolOutput{Content: fmt.Sprintf("Cell with id %q not found", args.CellID), IsError: true}, nil
 		}
 		cells = append(cells[:idx], cells[idx+1:]...)
 
 	default:
-		return &runtime.ToolOutput{
+		return &conventity.ToolOutput{
 			Content: fmt.Sprintf("Invalid edit_mode %q; must be replace, insert, or delete", args.EditMode),
 			IsError: true,
 		}, nil
@@ -2199,20 +2225,20 @@ func (r *Registry) notebookEditTool(ctx context.Context, input json.RawMessage) 
 	// Write back.
 	cellsJSON, err := json.Marshal(cells)
 	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Failed to marshal cells: %v", err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Failed to marshal cells: %v", err), IsError: true}, nil
 	}
 	nb["cells"] = cellsJSON
 
 	nbJSON, err := json.MarshalIndent(nb, "", "  ")
 	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Failed to marshal notebook: %v", err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Failed to marshal notebook: %v", err), IsError: true}, nil
 	}
 
 	if err := os.WriteFile(resolved, nbJSON, 0o644); err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Failed to write notebook: %v", err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Failed to write notebook: %v", err), IsError: true}, nil
 	}
 
-	return &runtime.ToolOutput{
+	return &conventity.ToolOutput{
 		Content: fmt.Sprintf("Notebook %s edited (%s mode)", args.NotebookPath, args.EditMode),
 		IsError: false,
 	}, nil
@@ -2239,98 +2265,98 @@ func findCellByID(cells []map[string]interface{}, id string) int {
 	return -1
 }
 
-func (r *Registry) sleepTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
+func (r *Registry) sleepTool(ctx context.Context, input json.RawMessage) (*conventity.ToolOutput, error) {
 	var args struct {
 		Seconds int `json:"seconds"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
 	}
 	if args.Seconds < 1 {
-		return &runtime.ToolOutput{Content: "seconds must be at least 1", IsError: true}, nil
+		return &conventity.ToolOutput{Content: "seconds must be at least 1", IsError: true}, nil
 	}
 
 	dur := time.Duration(args.Seconds) * time.Second
 	select {
 	case <-ctx.Done():
-		return &runtime.ToolOutput{Content: "Sleep interrupted: " + ctx.Err().Error(), IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Sleep interrupted: " + ctx.Err().Error(), IsError: true}, nil
 	case <-time.After(dur):
-		return &runtime.ToolOutput{
+		return &conventity.ToolOutput{
 			Content: fmt.Sprintf("Slept for %d seconds", args.Seconds),
 			IsError: false,
 		}, nil
 	}
 }
 
-func (r *Registry) sendUserMessageTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
+func (r *Registry) sendUserMessageTool(ctx context.Context, input json.RawMessage) (*conventity.ToolOutput, error) {
 	var args struct {
 		Message string `json:"message"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
 	}
 	if args.Message == "" {
-		return &runtime.ToolOutput{Content: "message is required", IsError: true}, nil
+		return &conventity.ToolOutput{Content: "message is required", IsError: true}, nil
 	}
 
 	// Return the message as content; the caller displays it in the response.
-	return &runtime.ToolOutput{Content: args.Message, IsError: false}, nil
+	return &conventity.ToolOutput{Content: args.Message, IsError: false}, nil
 }
 
-func (r *Registry) configTool(ctx context.Context, input json.RawMessage) (*runtime.ToolOutput, error) {
+func (r *Registry) configTool(ctx context.Context, input json.RawMessage) (*conventity.ToolOutput, error) {
 	var args struct {
 		Action string          `json:"action"`
 		Path   string          `json:"path"`
 		Value  json.RawMessage `json:"value"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
-		return &runtime.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
+		return &conventity.ToolOutput{Content: "Invalid input: " + err.Error(), IsError: true}, nil
 	}
 	if args.Action == "" {
-		return &runtime.ToolOutput{Content: "action is required", IsError: true}, nil
+		return &conventity.ToolOutput{Content: "action is required", IsError: true}, nil
 	}
 	if args.Path == "" {
-		return &runtime.ToolOutput{Content: "path is required", IsError: true}, nil
+		return &conventity.ToolOutput{Content: "path is required", IsError: true}, nil
 	}
 
 	// Load current settings.
 	settings, err := config.LoadAll(r.workspaceRoot)
 	if err != nil {
-		return &runtime.ToolOutput{Content: fmt.Sprintf("Failed to load settings: %v", err), IsError: true}, nil
+		return &conventity.ToolOutput{Content: fmt.Sprintf("Failed to load settings: %v", err), IsError: true}, nil
 	}
 
 	switch args.Action {
 	case "read":
 		val, err := getSettingByPath(&settings, args.Path)
 		if err != nil {
-			return &runtime.ToolOutput{Content: err.Error(), IsError: true}, nil
+			return &conventity.ToolOutput{Content: err.Error(), IsError: true}, nil
 		}
 		result, _ := json.MarshalIndent(val, "", "  ")
-		return &runtime.ToolOutput{Content: string(result), IsError: false}, nil
+		return &conventity.ToolOutput{Content: string(result), IsError: false}, nil
 
 	case "write":
 		if len(args.Value) == 0 {
-			return &runtime.ToolOutput{Content: "value is required for write action", IsError: true}, nil
+			return &conventity.ToolOutput{Content: "value is required for write action", IsError: true}, nil
 		}
 		var val interface{}
 		if err := json.Unmarshal(args.Value, &val); err != nil {
-			return &runtime.ToolOutput{Content: fmt.Sprintf("Invalid value: %v", err), IsError: true}, nil
+			return &conventity.ToolOutput{Content: fmt.Sprintf("Invalid value: %v", err), IsError: true}, nil
 		}
 		if err := setSettingByPath(&settings, args.Path, val); err != nil {
-			return &runtime.ToolOutput{Content: err.Error(), IsError: true}, nil
+			return &conventity.ToolOutput{Content: err.Error(), IsError: true}, nil
 		}
 		// Determine whether to save to global or project config.
 		// We save to the project config for workspace-scoped changes.
 		if err := config.SaveProject(r.workspaceRoot, settings); err != nil {
-			return &runtime.ToolOutput{Content: fmt.Sprintf("Failed to save settings: %v", err), IsError: true}, nil
+			return &conventity.ToolOutput{Content: fmt.Sprintf("Failed to save settings: %v", err), IsError: true}, nil
 		}
-		return &runtime.ToolOutput{
+		return &conventity.ToolOutput{
 			Content: fmt.Sprintf("Setting %s updated", args.Path),
 			IsError: false,
 		}, nil
 
 	default:
-		return &runtime.ToolOutput{
+		return &conventity.ToolOutput{
 			Content: fmt.Sprintf("Invalid action %q; must be read or write", args.Action),
 			IsError: true,
 		}, nil
@@ -2408,4 +2434,3 @@ func setSettingByPath(s *config.Settings, path string, value interface{}) error 
 
 	return nil
 }
-

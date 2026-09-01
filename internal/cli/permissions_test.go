@@ -4,7 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/hieu-glaw/glaw-code/internal/runtime"
+	permentity "github.com/hieu-glaw/glaw-code/internal/modules/permission/domain/entity"
+	permservice "github.com/hieu-glaw/glaw-code/internal/modules/permission/domain/service"
 )
 
 func TestFormatToolInput(t *testing.T) {
@@ -110,31 +111,31 @@ func TestFormatGenericInputTruncation(t *testing.T) {
 // --- CheckAndPrompt tests ---
 
 func TestCheckAndPromptNilManager(t *testing.T) {
-	result := CheckAndPrompt(nil, nil, "bash", runtime.PermExecuteCommand, json.RawMessage(`{}`))
+	result := CheckAndPrompt(nil, nil, "bash", permentity.PermExecuteCommand, json.RawMessage(`{}`))
 	if !result.Allowed {
 		t.Error("nil manager should allow everything")
 	}
 }
 
 func TestCheckAndPromptFullAccess(t *testing.T) {
-	pm := runtime.NewEnhancedPermissionManager(runtime.PermDangerFullAccess, "/tmp")
-	result := CheckAndPrompt(pm, nil, "bash", runtime.PermExecuteCommand, json.RawMessage(`{"command":"ls"}`))
+	pm := permservice.NewEnhancedPermissionManager(permentity.PermDangerFullAccess, "/tmp")
+	result := CheckAndPrompt(pm, nil, "bash", permentity.PermExecuteCommand, json.RawMessage(`{"command":"ls"}`))
 	if !result.Allowed {
 		t.Error("full access mode should allow bash")
 	}
 }
 
 func TestCheckAndPromptReadOnlyDenied(t *testing.T) {
-	pm := runtime.NewEnhancedPermissionManager(runtime.PermReadOnly, "/tmp")
-	result := CheckAndPrompt(pm, nil, "bash", runtime.PermExecuteCommand, json.RawMessage(`{"command":"ls"}`))
+	pm := permservice.NewEnhancedPermissionManager(permentity.PermReadOnly, "/tmp")
+	result := CheckAndPrompt(pm, nil, "bash", permentity.PermExecuteCommand, json.RawMessage(`{"command":"ls"}`))
 	if result.Allowed {
 		t.Error("read_only mode should deny bash")
 	}
 }
 
 func TestCheckAndPromptPromptModeNoPrompter(t *testing.T) {
-	pm := runtime.NewEnhancedPermissionManager(runtime.PermPrompt, "/tmp")
-	result := CheckAndPrompt(pm, nil, "bash", runtime.PermExecuteCommand, json.RawMessage(`{"command":"ls"}`))
+	pm := permservice.NewEnhancedPermissionManager(permentity.PermPrompt, "/tmp")
+	result := CheckAndPrompt(pm, nil, "bash", permentity.PermExecuteCommand, json.RawMessage(`{"command":"ls"}`))
 	if result.Allowed {
 		t.Error("prompt mode without prompter should deny")
 	}
@@ -144,14 +145,14 @@ func TestCheckAndPromptPromptModeNoPrompter(t *testing.T) {
 }
 
 func TestCheckAndPromptCachedApproval(t *testing.T) {
-	pm := runtime.NewEnhancedPermissionManager(runtime.PermPrompt, "/tmp")
+	pm := permservice.NewEnhancedPermissionManager(permentity.PermPrompt, "/tmp")
 	input := json.RawMessage(`{"command":"ls"}`)
 
 	// Cache an approval.
 	pm.RecordDecision("bash", input, true)
 
 	// CheckAndPrompt should return the cached approval without needing a prompter.
-	result := CheckAndPrompt(pm, nil, "bash", runtime.PermExecuteCommand, input)
+	result := CheckAndPrompt(pm, nil, "bash", permentity.PermExecuteCommand, input)
 	if !result.Allowed {
 		t.Error("cached approval should be returned without prompting")
 	}

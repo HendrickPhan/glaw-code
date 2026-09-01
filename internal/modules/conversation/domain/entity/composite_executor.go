@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/hieu-glaw/glaw-code/internal/mcp"
+	mcp "github.com/hieu-glaw/glaw-code/internal/modules/mcp/infrastructure/transport"
 	"github.com/hieu-glaw/glaw-code/internal/shared/api"
 )
 

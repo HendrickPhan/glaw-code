@@ -1,15 +1,15 @@
 // Example 04: Sub-Agents
 //
 // Demonstrates ALL sub-agent functions available in glaw-code:
-//   1. Built-in sub-agent definitions and lookup
-//   2. Loading agents from .glaw/agents/ config files (markdown + YAML frontmatter)
-//   3. Project-level overrides user-level precedence
-//   4. SubAgentOrchestrator: SpawnTask, WaitTask, ListTasks, GetTask, CancelTask
-//   5. SubAgentExecutor: FilterTools, BuildSystemPrompt, Execute
-//   6. ResolvedTools and ResolvedModel helpers
-//   7. The sub_agent tool through tools.Registry
-//   8. End-to-end workflow with multiple agents
-//   9. Auto-loading all agents from disk with LoadAllSubAgents
+//  1. Built-in sub-agent definitions and lookup
+//  2. Loading agents from .glaw/agents/ config files (markdown + YAML frontmatter)
+//  3. Project-level overrides user-level precedence
+//  4. SubAgentOrchestrator: SpawnTask, WaitTask, ListTasks, GetTask, CancelTask
+//  5. SubAgentExecutor: FilterTools, BuildSystemPrompt, Execute
+//  6. ResolvedTools and ResolvedModel helpers
+//  7. The sub_agent tool through tools.Registry
+//  8. End-to-end workflow with multiple agents
+//  9. Auto-loading all agents from disk with LoadAllSubAgents
 //
 // This example uses pre-created config files in .glaw/agents/ instead of
 // hardcoding agent definitions in code. See .glaw/agents/*.md for the
@@ -26,9 +26,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/hieu-glaw/glaw-code/internal/agent"
 	"github.com/hieu-glaw/glaw-code/internal/api"
-	"github.com/hieu-glaw/glaw-code/internal/tools"
+	agentusecase "github.com/hieu-glaw/glaw-code/internal/modules/agent/application/usecase"
+	agententity "github.com/hieu-glaw/glaw-code/internal/modules/agent/domain/entity"
+	tools "github.com/hieu-glaw/glaw-code/internal/modules/tools/infrastructure/registry"
 )
 
 func main() {
@@ -67,14 +68,14 @@ func main() {
 	fmt.Println("Built-in agents available:")
 	fmt.Println()
 
-	for _, name := range agent.BuiltinSubAgentNames() {
-		sa := agent.GetBuiltinSubAgent(name)
+	for _, name := range agententity.BuiltinSubAgentNames() {
+		sa := agententity.GetBuiltinSubAgent(name)
 		fmt.Printf("  %-20s tools: [%s]\n", sa.Name, strings.Join(sa.Tools, ", "))
 	}
 
-	e := agent.GetBuiltinSubAgent("Explore")
+	e := agententity.GetBuiltinSubAgent("Explore")
 	fmt.Printf("\n  GetBuiltinSubAgent(\"Explore\") → %d tools: %v\n", len(e.Tools), e.Tools)
-	fmt.Printf("  GetBuiltinSubAgent(\"nonexistent\") → nil: %v\n", agent.GetBuiltinSubAgent("nonexistent") == nil)
+	fmt.Printf("  GetBuiltinSubAgent(\"nonexistent\") → nil: %v\n", agententity.GetBuiltinSubAgent("nonexistent") == nil)
 
 	// ── 2. Show Pre-Created Config Files ───────────────────────
 	section("2. Agent Config Files (.glaw/agents/*.md)")
@@ -104,7 +105,7 @@ func main() {
 
 	// ── 3. Load Project-Level Agents from Disk ─────────────────
 	section("3. Load Agents from .glaw/agents/ (project level)")
-	loaded, errs := agent.LoadSubAgentsFromDir(agentsDir, "project")
+	loaded, errs := agententity.LoadSubAgentsFromDir(agentsDir, "project")
 	fmt.Printf("  LoadSubAgentsFromDir → %d agents, %d errors\n", len(loaded), len(errs))
 	for _, c := range loaded {
 		fmt.Printf("    - %-15s (level=%s, tools=%v)\n", c.Name, c.Level, c.Tools)
@@ -122,27 +123,27 @@ func main() {
 
 	// Create a user-level agent with the same name as a project-level one
 	// to show that project-level takes precedence.
-	userAgent := &agent.SubAgentConfig{
+	userAgent := &agententity.SubAgentConfig{
 		Name:        "shared-name",
 		Description: "User-level version",
 		Tools:       []string{"read_file"},
 		Prompt:      "User agent.",
 	}
-	check(agent.CreateSubAgentFile(userDir, userAgent))
+	check(agententity.CreateSubAgentFile(userDir, userAgent))
 	fmt.Printf("  Created user-level agent: %s/shared-name.md\n", userDir)
 
 	// Also create a user-only agent (not overridden by project)
-	userOnlyAgent := &agent.SubAgentConfig{
+	userOnlyAgent := &agententity.SubAgentConfig{
 		Name:        "general-helper",
 		Description: "A user-level general helper",
 		Tools:       []string{"read_file", "bash", "grep_search"},
 		Prompt:      "You are a helpful general-purpose assistant.",
 	}
-	check(agent.CreateSubAgentFile(userDir, userOnlyAgent))
+	check(agententity.CreateSubAgentFile(userDir, userOnlyAgent))
 	fmt.Printf("  Created user-level agent: %s/general-helper.md\n", userDir)
 
 	// LoadAllSubAgents shows project-level overrides user-level
-	all, err := agent.LoadAllSubAgents(workspace)
+	all, err := agententity.LoadAllSubAgents(workspace)
 	check(err)
 	fmt.Printf("\n  LoadAllSubAgents → %d total agents:\n", len(all))
 	for _, c := range all {
@@ -159,10 +160,10 @@ func main() {
 	section("5. ResolvedTools & ResolvedModel")
 	allTools := []string{"bash", "read_file", "write_file", "edit_file", "glob_search", "grep_search"}
 
-	emptyCfg := &agent.SubAgentConfig{Name: "inherit"}
+	emptyCfg := &agententity.SubAgentConfig{Name: "inherit"}
 	fmt.Printf("  ResolvedTools(empty) → inherits all %d: %v\n", len(emptyCfg.ResolvedTools(allTools)), emptyCfg.ResolvedTools(allTools))
 
-	filteredCfg := &agent.SubAgentConfig{Name: "filtered", Tools: []string{"read_file", "grep_search"}}
+	filteredCfg := &agententity.SubAgentConfig{Name: "filtered", Tools: []string{"read_file", "grep_search"}}
 	fmt.Printf("  ResolvedTools(filtered) → %d: %v\n", len(filteredCfg.ResolvedTools(allTools)), filteredCfg.ResolvedTools(allTools))
 
 	// Show tools for agents loaded from disk
@@ -184,7 +185,7 @@ func main() {
 		{"haiku", "claude-sonnet-4-6", "claude-haiku-4"},
 	}
 	for _, m := range models {
-		c := &agent.SubAgentConfig{Model: m.cfg}
+		c := &agententity.SubAgentConfig{Model: m.cfg}
 		fmt.Printf("  ResolvedModel(%q, parent=%q) → %q\n", m.cfg, m.parent, c.ResolvedModel(m.parent))
 	}
 
@@ -197,10 +198,10 @@ func main() {
 
 	// ── 6. SubAgentOrchestrator Lifecycle ──────────────────────
 	section("6. SubAgentOrchestrator — Spawn, Wait, List, Get, Cancel")
-	agent.SetCustomConfigs(all)
+	agentusecase.SetCustomConfigs(all)
 	reg := tools.NewRegistry(tmpDir)
 	specs := reg.GetToolSpecs()
-	orch := agent.NewSubAgentOrchestrator(reg, specs, "claude-sonnet-4-6")
+	orch := agentusecase.NewSubAgentOrchestrator(reg, specs, "claude-sonnet-4-6")
 
 	// Wire the orchestrator into the registry so the sub_agent tool works.
 	reg.SetOrchestrator(orch)
@@ -264,21 +265,21 @@ func main() {
 	section("7. SubAgentExecutor — FilterTools, BuildSystemPrompt, Execute")
 
 	// Use a built-in agent
-	exploreCfg := agent.GetBuiltinSubAgent("Explore")
-	exec := agent.NewSubAgentExecutor(exploreCfg, reg, specs, "claude-sonnet-4-6")
+	exploreCfg := agententity.GetBuiltinSubAgent("Explore")
+	exec := agentusecase.NewSubAgentExecutor(exploreCfg, reg, specs, "claude-sonnet-4-6")
 	demoExecutor("Explore (built-in)", exec, ctx)
 
 	// Use a disk-loaded custom agent
 	goExpertCfg := findAgent(all, "go-expert")
 	if goExpertCfg != nil {
-		exec2 := agent.NewSubAgentExecutor(goExpertCfg, reg, specs, "claude-sonnet-4-6")
+		exec2 := agentusecase.NewSubAgentExecutor(goExpertCfg, reg, specs, "claude-sonnet-4-6")
 		demoExecutor("go-expert (from .glaw/agents/)", exec2, ctx)
 	}
 
 	// Use another disk-loaded agent
 	reviewerCfg := findAgent(all, "reviewer")
 	if reviewerCfg != nil {
-		exec3 := agent.NewSubAgentExecutor(reviewerCfg, reg, specs, "claude-sonnet-4-6")
+		exec3 := agentusecase.NewSubAgentExecutor(reviewerCfg, reg, specs, "claude-sonnet-4-6")
 		demoExecutor("reviewer (from .glaw/agents/)", exec3, ctx)
 	}
 
@@ -323,8 +324,8 @@ func main() {
 
 	// ── 9. Spawn All Available Agents ──────────────────────────
 	section("9. Spawn All Available Agents (built-in + custom from config files)")
-	agent.SetCustomConfigs(all)
-	agents := agent.AllAvailableAgents()
+	agentusecase.SetCustomConfigs(all)
+	agents := agentusecase.AllAvailableAgents()
 	fmt.Printf("  Total agents available: %d\n\n", len(agents))
 	for _, a := range agents {
 		out, _ = reg.ExecuteTool(ctx, "sub_agent", mustJSON(map[string]interface{}{
@@ -401,9 +402,9 @@ func main() {
 
 	// ── Summary ───────────────────────────────────────────────
 	section("Summary")
-	agent.SetCustomConfigs(all)
-	agents = agent.AllAvailableAgents()
-	builtinCount := len(agent.BuiltinSubAgentNames())
+	agentusecase.SetCustomConfigs(all)
+	agents = agentusecase.AllAvailableAgents()
+	builtinCount := len(agententity.BuiltinSubAgentNames())
 	customCount := len(agents) - builtinCount
 	fmt.Printf("  Total agents available: %d\n", len(agents))
 	fmt.Printf("  Built-in: %d\n", builtinCount)
@@ -479,7 +480,7 @@ func toolExists(specs []api.ToolDefinition, name string) bool {
 	return false
 }
 
-func findAgent(agents []*agent.SubAgentConfig, name string) *agent.SubAgentConfig {
+func findAgent(agents []*agententity.SubAgentConfig, name string) *agententity.SubAgentConfig {
 	for _, a := range agents {
 		if a.Name == name {
 			return a
@@ -488,7 +489,7 @@ func findAgent(agents []*agent.SubAgentConfig, name string) *agent.SubAgentConfi
 	return nil
 }
 
-func demoExecutor(label string, exec *agent.SubAgentExecutor, ctx context.Context) {
+func demoExecutor(label string, exec *agentusecase.SubAgentExecutor, ctx context.Context) {
 	ft := exec.FilterTools()
 	fmt.Printf("  %s FilterTools() → %d tools:\n", label, len(ft))
 	for _, t := range ft {

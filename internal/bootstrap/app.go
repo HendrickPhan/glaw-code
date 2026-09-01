@@ -8,12 +8,15 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/hieu-glaw/glaw-code/internal/agent"
 	"github.com/hieu-glaw/glaw-code/internal/api"
-	"github.com/hieu-glaw/glaw-code/internal/config"
-	"github.com/hieu-glaw/glaw-code/internal/mcp"
-	"github.com/hieu-glaw/glaw-code/internal/runtime"
-	"github.com/hieu-glaw/glaw-code/internal/tools"
+	agentusecase "github.com/hieu-glaw/glaw-code/internal/modules/agent/application/usecase"
+	agententity "github.com/hieu-glaw/glaw-code/internal/modules/agent/domain/entity"
+	config "github.com/hieu-glaw/glaw-code/internal/modules/config/domain/entity"
+	conventity "github.com/hieu-glaw/glaw-code/internal/modules/conversation/domain/entity"
+	mcp "github.com/hieu-glaw/glaw-code/internal/modules/mcp/infrastructure/transport"
+	permservice "github.com/hieu-glaw/glaw-code/internal/modules/permission/domain/service"
+	sessionentity "github.com/hieu-glaw/glaw-code/internal/modules/session/domain/entity"
+	tools "github.com/hieu-glaw/glaw-code/internal/modules/tools/infrastructure/registry"
 )
 
 // MCPConfig represents an MCP server configuration for bootstrap purposes.
@@ -28,17 +31,17 @@ type MCPConfig struct {
 
 // AppConfig holds all configuration needed to bootstrap the application.
 type AppConfig struct {
-	Settings       config.Settings
-	RuntimeConfig  *runtime.Config
-	APIClient      api.ProviderClient
-	MCPManager     *mcp.Manager
-	ToolRegistry   *tools.Registry
-	PermManager    *runtime.PermissionManager
-	WorkspaceRoot  string
+	Settings      config.Settings
+	RuntimeConfig *conventity.Config
+	APIClient     api.ProviderClient
+	MCPManager    *mcp.Manager
+	ToolRegistry  *tools.Registry
+	PermManager   *permservice.PermissionManager
+	WorkspaceRoot string
 }
 
 // LoadConfig loads and layers configuration from all sources.
-func LoadConfig(workspaceRoot string, modelOverride string, permOverride string, configPath string) (config.Settings, *runtime.Config, error) {
+func LoadConfig(workspaceRoot string, modelOverride string, permOverride string, configPath string) (config.Settings, *conventity.Config, error) {
 	settings, err := config.LoadAll(workspaceRoot)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: loading settings: %v\n", err)
@@ -61,7 +64,7 @@ func LoadConfig(workspaceRoot string, modelOverride string, permOverride string,
 		settings.Permissions.Mode = permOverride
 	}
 
-	cfg := runtime.ConfigFromSettings(settings)
+	cfg := conventity.ConfigFromSettings(settings)
 	return settings, cfg, nil
 }
 
@@ -85,17 +88,17 @@ func SetupTools(workspaceRoot string, model string, apiClient api.ProviderClient
 	registry := tools.NewRegistry(workspaceRoot)
 
 	// Load custom sub-agent configs
-	customAgents, err := agent.LoadAllSubAgents(workspaceRoot)
+	customAgents, err := agententity.LoadAllSubAgents(workspaceRoot)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: loading sub-agent configs: %v\n", err)
 	}
 	if len(customAgents) > 0 {
-		agent.SetCustomConfigs(customAgents)
+		agentusecase.SetCustomConfigs(customAgents)
 	}
 
 	// Create and wire the orchestrator
 	specs := registry.GetToolSpecs()
-	orch := agent.NewSubAgentOrchestratorWithClient(registry, specs, model, apiClient)
+	orch := agentusecase.NewSubAgentOrchestratorWithClient(registry, specs, model, apiClient)
 	registry.SetOrchestrator(orch)
 
 	return registry
@@ -104,11 +107,11 @@ func SetupTools(workspaceRoot string, model string, apiClient api.ProviderClient
 // CreateRuntime creates the full conversation runtime with all dependencies.
 func CreateRuntime(
 	client api.ProviderClient,
-	cfg *runtime.Config,
-	permManager *runtime.PermissionManager,
-	toolExec runtime.ToolExecutor,
-) *runtime.ConversationRuntime {
-	rt := runtime.NewConversationRuntime(client, cfg, runtime.NewSession(), permManager, toolExec)
+	cfg *conventity.Config,
+	permManager *permservice.PermissionManager,
+	toolExec conventity.ToolExecutor,
+) *conventity.ConversationRuntime {
+	rt := conventity.NewConversationRuntime(client, cfg, sessionentity.NewSession(), permManager, toolExec)
 	rt.ClientFactory = func(model string) (api.ProviderClient, error) {
 		return api.NewProviderClient(model)
 	}

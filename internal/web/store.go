@@ -10,8 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hieu-glaw/glaw-code/internal/commands"
-	"github.com/hieu-glaw/glaw-code/internal/runtime"
+	commands "github.com/hieu-glaw/glaw-code/internal/modules/commands/domain/entity"
+	conventity "github.com/hieu-glaw/glaw-code/internal/modules/conversation/domain/entity"
+	sessionentity "github.com/hieu-glaw/glaw-code/internal/modules/session/domain/entity"
+	sessionpersistence "github.com/hieu-glaw/glaw-code/internal/modules/session/infrastructure/persistence"
 )
 
 // SessionInfo is a summary of a session for listing.
@@ -21,12 +23,12 @@ type SessionInfo struct {
 	MessageCount int       `json:"message_count"`
 }
 
-// WrappedSession wraps a runtime.Session with metadata for the web layer.
+// WrappedSession wraps a sessionentity.Session with metadata for the web layer.
 type WrappedSession struct {
 	ID           string
 	CreatedAt    time.Time
-	Conversation *runtime.Session
-	Runtime      *runtime.ConversationRuntime
+	Conversation *sessionentity.Session
+	Runtime      *conventity.ConversationRuntime
 	Dispatcher   *commands.Dispatcher
 	Cleanup      func()
 }
@@ -85,7 +87,7 @@ func (s *WebSessionStore) CreateSession() string {
 	s.sessions[id] = &WrappedSession{
 		ID:           id,
 		CreatedAt:    time.Now(),
-		Conversation: runtime.NewSession(),
+		Conversation: sessionentity.NewSession(),
 	}
 	return id
 }
@@ -97,7 +99,7 @@ func (s *WebSessionStore) CreateSessionWithRuntime(rf RuntimeFactory) (*WrappedS
 
 	s.nextID++
 	id := formatSessionID(s.nextID)
-	sess := runtime.NewSession()
+	sess := sessionentity.NewSession()
 
 	ws := &WrappedSession{
 		ID:           id,
@@ -129,7 +131,7 @@ func (s *WebSessionStore) loadFromDisk(id string) (*WrappedSession, error) {
 	}
 
 	path := filepath.Join(s.workspaceRoot, ".glaw", "sessions", id+".json")
-	session, err := runtime.LoadSession(path)
+	session, err := sessionpersistence.LoadSession(path)
 	if err != nil {
 		return nil, fmt.Errorf("session not found: %s", id)
 	}

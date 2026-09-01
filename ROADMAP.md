@@ -60,7 +60,6 @@
 - **No `glaw` SDK or API** — other tools can't programmatically drive glaw-code.
 - **No remote access** — glaw-code is local-only; can't control from phone, another machine, or CI.
 - **No autonomous mode** — glaw-code requires interactive human oversight; can't work independently.
-- **`internal/runtime/` facade not removed** — 12+ files still import the backward-compatibility facade; module migration is functionally complete but cleanup is pending.
 
 ---
 
@@ -106,7 +105,7 @@ Finish migrating remaining flat packages into the `internal/modules/` structure 
 - [x] Move `internal/config/` → `internal/modules/config/`
 - [x] Move `internal/tasks/` → `internal/modules/tasks/`
 - [x] Move `internal/plugins/` → `internal/modules/plugins/`
-- [ ] Remove the `internal/runtime/` backward-compatibility facade once all consumers are migrated (12+ files still import it)
+- [x] Remove the `internal/runtime/` backward-compatibility facade once all consumers are migrated (all facade packages — `runtime`, `mcp`, `agent`, `config`, `tools`, `commands`, `tasks`, `lsp`, `plugins` — removed; consumers import canonical module paths)
 - [x] Update `cmd/glaw/main.go` to use `bootstrap` exclusively
 
 ### 1.2 Streaming in the CLI REPL

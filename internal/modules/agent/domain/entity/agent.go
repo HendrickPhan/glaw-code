@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hieu-glaw/glaw-code/internal/runtime"
+	conventity "github.com/hieu-glaw/glaw-code/internal/modules/conversation/domain/entity"
 )
 
 // Status constants for an Agent.
@@ -24,12 +24,12 @@ const (
 // goroutine.  Callers can check status, wait for completion, or cancel the
 // agent at any time.
 type Agent struct {
-	ID      string
-	Type    AgentType
-	Status  string
-	Prompt  string
-	Result  *AgentResult
-	rt      *runtime.ConversationRuntime
+	ID     string
+	Type   AgentType
+	Status string
+	Prompt string
+	Result *AgentResult
+	rt     *conventity.ConversationRuntime
 
 	// mu protects the mutable fields above from concurrent access.
 	mu sync.RWMutex
@@ -56,7 +56,7 @@ func (a *Agent) GetStatus() string {
 
 // newAgent allocates an Agent ready for execution.  The caller must still
 // call run() (typically from Manager.Spawn) to start processing.
-func NewAgent(id string, agentType AgentType, prompt string, rt *runtime.ConversationRuntime) *Agent {
+func NewAgent(id string, agentType AgentType, prompt string, rt *conventity.ConversationRuntime) *Agent {
 	return &Agent{
 		ID:        id,
 		Type:      agentType,
