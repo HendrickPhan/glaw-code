@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hieu-glaw/glaw-code/internal/commands"
+	commands "github.com/hieu-glaw/glaw-code/internal/modules/commands/domain/entity"
 	"golang.org/x/term"
 )
 

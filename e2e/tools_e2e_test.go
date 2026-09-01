@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hieu-glaw/glaw-code/internal/runtime"
-	"github.com/hieu-glaw/glaw-code/internal/tools"
+	conventity "github.com/hieu-glaw/glaw-code/internal/modules/conversation/domain/entity"
+	tools "github.com/hieu-glaw/glaw-code/internal/modules/tools/infrastructure/registry"
 )
 
 func newTestRegistry(t *testing.T) (*tools.Registry, string) {
@@ -31,7 +31,7 @@ func toolInput(t *testing.T, v interface{}) json.RawMessage {
 	return b
 }
 
-func execTool(t *testing.T, reg *tools.Registry, name string, input interface{}) *runtime.ToolOutput {
+func execTool(t *testing.T, reg *tools.Registry, name string, input interface{}) *conventity.ToolOutput {
 	t.Helper()
 	out, err := reg.ExecuteTool(context.Background(), name, toolInput(t, input))
 	if err != nil {
@@ -45,7 +45,6 @@ func execTool(t *testing.T, reg *tools.Registry, name string, input interface{})
 func TestE2EToolRegistrySpecs(t *testing.T) {
 	reg, _ := newTestRegistry(t)
 	specs := reg.GetToolSpecs()
-
 
 	wantNames := map[string]bool{
 		"bash": false, "bash_result": false, "bash_stop": false,
@@ -275,14 +274,14 @@ func TestE2EToolEditFileMissingFile(t *testing.T) {
 func TestE2EToolGlobSearch(t *testing.T) {
 	reg, dir := newTestRegistry(t)
 	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("pkg main"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "b.go"), []byte("pkg main"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "c.txt"), []byte("text"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b.go"), []byte("pkg main"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "c.txt"), []byte("text"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out := execTool(t, reg, "glob_search", map[string]string{"pattern": "*.go"})
 	if out.IsError {
@@ -331,11 +330,11 @@ func TestE2EToolGrepSearchInSubdirectory(t *testing.T) {
 	reg, dir := newTestRegistry(t)
 	sub := filepath.Join(dir, "sub")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(sub, "target.go"), []byte("target_string here\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "target.go"), []byte("target_string here\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out := execTool(t, reg, "grep_search", map[string]string{"pattern": "target_string", "path": "sub"})
 	if out.IsError {

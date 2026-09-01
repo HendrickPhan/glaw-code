@@ -6,7 +6,8 @@ import (
 	"io/fs"
 	"net/http"
 
-	"github.com/hieu-glaw/glaw-code/internal/runtime"
+	conventity "github.com/hieu-glaw/glaw-code/internal/modules/conversation/domain/entity"
+	sessionentity "github.com/hieu-glaw/glaw-code/internal/modules/session/domain/entity"
 )
 
 //go:embed static/*
@@ -14,7 +15,7 @@ var webUI embed.FS
 
 // RuntimeFactory creates a conversation runtime for a given session.
 // Returns the runtime, a cleanup function, and any error.
-type RuntimeFactory func(sess *runtime.Session) (*runtime.ConversationRuntime, func(), error)
+type RuntimeFactory func(sess *sessionentity.Session) (*conventity.ConversationRuntime, func(), error)
 
 // WebServer is the HTTP/WebSocket server for the web UI.
 type WebServer struct {

@@ -8,7 +8,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/hieu-glaw/glaw-code/internal/runtime"
+	permentity "github.com/hieu-glaw/glaw-code/internal/modules/permission/domain/entity"
+	permservice "github.com/hieu-glaw/glaw-code/internal/modules/permission/domain/service"
 )
 
 // PermissionPrompter handles interactive permission prompts in the REPL.
@@ -214,14 +215,14 @@ func formatGenericInput(input map[string]interface{}) string {
 // The enhancedPM and prompter can be nil; in those cases the function falls back
 // to allowing everything.
 func CheckAndPrompt(
-	enhancedPM *runtime.EnhancedPermissionManager,
+	enhancedPM *permservice.EnhancedPermissionManager,
 	prompter *PermissionPrompter,
 	toolName string,
-	requiredPerm runtime.Permission,
+	requiredPerm permentity.Permission,
 	input json.RawMessage,
-) *runtime.PermissionResult {
+) *permentity.PermissionResult {
 	if enhancedPM == nil {
-		return &runtime.PermissionResult{Allowed: true, Message: "no permission manager"}
+		return &permentity.PermissionResult{Allowed: true, Message: "no permission manager"}
 	}
 
 	result := enhancedPM.CheckToolPermission(toolName, requiredPerm, input)
@@ -237,7 +238,7 @@ func CheckAndPrompt(
 	// Need to prompt the user.
 	if prompter == nil {
 		// No prompter available (non-interactive mode), deny.
-		return &runtime.PermissionResult{
+		return &permentity.PermissionResult{
 			Allowed:      false,
 			Message:      "interactive prompt required but not available in non-interactive mode",
 			DenialReason: "no_prompter",
@@ -250,7 +251,7 @@ func CheckAndPrompt(
 
 	allowed, choice := prompter.PromptForPermissionChoice(toolName, input)
 	if !allowed {
-		return &runtime.PermissionResult{
+		return &permentity.PermissionResult{
 			Allowed:      false,
 			Message:      "user denied permission",
 			DenialReason: "user_denied",
@@ -267,7 +268,7 @@ func CheckAndPrompt(
 		msg = "user approved (always)"
 	}
 
-	return &runtime.PermissionResult{
+	return &permentity.PermissionResult{
 		Allowed: true,
 		Message: msg,
 	}
