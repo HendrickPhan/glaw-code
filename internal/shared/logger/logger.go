@@ -81,11 +81,11 @@ var logger *slog.Logger
 var currentLevel atomic.Int64 // stores LogLevel as int64
 
 // Init initializes the global logger with the given level and format.
-// If level is LevelUnset (or negative), LevelInfo is used as default.
+// If level is LevelUnset, LevelInfo is used as default.
 // If format is empty, FormatText is used as default.
 // If w is nil, os.Stderr is used.
 func Init(level LogLevel, format LogFormat, w io.Writer) {
-	if level < 0 {
+	if level == LevelUnset {
 		level = LevelInfo
 	}
 	if format == "" {

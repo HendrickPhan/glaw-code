@@ -38,7 +38,7 @@ func TestBuiltinToolExecutorWriteAndRead(t *testing.T) {
 	exec := NewBuiltinToolExecutor(dir)
 
 	// Write
-	writeOut, err := exec.ExecuteTool(nil, "write_file", json.RawMessage(
+	writeOut, err := exec.ExecuteTool(context.Background(), "write_file", json.RawMessage(
 		`{"path":"test.txt","content":"hello world"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -48,7 +48,7 @@ func TestBuiltinToolExecutorWriteAndRead(t *testing.T) {
 	}
 
 	// Read
-	readOut, err := exec.ExecuteTool(nil, "read_file", json.RawMessage(
+	readOut, err := exec.ExecuteTool(context.Background(), "read_file", json.RawMessage(
 		`{"path":"test.txt"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -64,10 +64,12 @@ func TestBuiltinToolExecutorEditFile(t *testing.T) {
 
 	// Write initial content
 	f := filepath.Join(dir, "edit.txt")
-	os.WriteFile(f, []byte("hello world"), 0o644)
+	if err := os.WriteFile(f, []byte("hello world"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// Edit
-	out, err := exec.ExecuteTool(nil, "edit_file", json.RawMessage(
+	out, err := exec.ExecuteTool(context.Background(), "edit_file", json.RawMessage(
 		`{"path":"edit.txt","old_string":"hello","new_string":"goodbye"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -85,7 +87,7 @@ func TestBuiltinToolExecutorEditFile(t *testing.T) {
 
 func TestBuiltinToolExecutorUnknownTool(t *testing.T) {
 	exec := NewBuiltinToolExecutor(t.TempDir())
-	out, err := exec.ExecuteTool(nil, "nonexistent", json.RawMessage(`{}`))
+	out, err := exec.ExecuteTool(context.Background(), "nonexistent", json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +98,7 @@ func TestBuiltinToolExecutorUnknownTool(t *testing.T) {
 
 func TestBuiltinToolExecutorReadNonexistent(t *testing.T) {
 	exec := NewBuiltinToolExecutor(t.TempDir())
-	out, err := exec.ExecuteTool(nil, "read_file", json.RawMessage(
+	out, err := exec.ExecuteTool(context.Background(), "read_file", json.RawMessage(
 		`{"path":"nonexistent.txt"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +113,7 @@ func TestBuiltinToolExecutorEditNoMatch(t *testing.T) {
 	exec := NewBuiltinToolExecutor(dir)
 	os.WriteFile(filepath.Join(dir, "test.txt"), []byte("hello"), 0o644)
 
-	out, err := exec.ExecuteTool(nil, "edit_file", json.RawMessage(
+	out, err := exec.ExecuteTool(context.Background(), "edit_file", json.RawMessage(
 		`{"path":"test.txt","old_string":"xyz","new_string":"abc"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +127,7 @@ func TestBuiltinToolExecutorWriteCreatesDirs(t *testing.T) {
 	dir := t.TempDir()
 	exec := NewBuiltinToolExecutor(dir)
 
-	out, err := exec.ExecuteTool(nil, "write_file", json.RawMessage(
+	out, err := exec.ExecuteTool(context.Background(), "write_file", json.RawMessage(
 		`{"path":"sub/dir/test.txt","content":"nested"}`))
 	if err != nil {
 		t.Fatal(err)

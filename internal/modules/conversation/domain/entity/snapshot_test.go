@@ -12,9 +12,7 @@ import (
 )
 
 // mockToolExecutor is a simple mock for testing.
-type mockToolExecutor struct {
-	workspaceDir string
-}
+type mockToolExecutor struct{}
 
 func (m *mockToolExecutor) ExecuteTool(_ context.Context, name string, input json.RawMessage) (*ToolOutput, error) {
 	switch name {
@@ -129,7 +127,9 @@ func TestSnapshottingExecutorRevertAll(t *testing.T) {
 
 	// Batch 1
 	file1 := filepath.Join(dir, "a.txt")
-	os.WriteFile(file1, []byte("orig-a"), 0o644)
+	if err := os.WriteFile(file1, []byte("orig-a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	exec.BeginBatch()
 	input := json.RawMessage(`{"path":"` + file1 + `","content":"mod-a"}`)
 	_, _ = exec.ExecuteTool(context.Background(), "write_file", input)
@@ -137,7 +137,9 @@ func TestSnapshottingExecutorRevertAll(t *testing.T) {
 
 	// Batch 2
 	file2 := filepath.Join(dir, "b.txt")
-	os.WriteFile(file2, []byte("orig-b"), 0o644)
+	if err := os.WriteFile(file2, []byte("orig-b"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	exec.BeginBatch()
 	input = json.RawMessage(`{"path":"` + file2 + `","content":"mod-b"}`)
 	_, _ = exec.ExecuteTool(context.Background(), "write_file", input)

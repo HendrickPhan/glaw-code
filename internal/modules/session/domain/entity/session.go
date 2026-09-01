@@ -1,6 +1,8 @@
 package entity
 
 import (
+	crand "crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -18,18 +20,25 @@ type ConversationMessage struct {
 
 // Session represents a conversation session.
 type Session struct {
-	Version  int                  `json:"version"`
+	Version  int                   `json:"version"`
 	Messages []ConversationMessage `json:"messages"`
 	ID       string                `json:"id"`
 	mu       sync.RWMutex
 }
 
 // NewSession creates a new empty session.
+// The ID combines a millisecond timestamp with a random suffix so that two
+// sessions created within the same millisecond cannot collide.
 func NewSession() *Session {
+	suffix := time.Now().UnixNano() // fallback; crypto/rand below effectively never fails
+	var rnd [4]byte
+	if _, err := crand.Read(rnd[:]); err == nil {
+		suffix = int64(binary.BigEndian.Uint32(rnd[:]))
+	}
 	return &Session{
 		Version:  1,
 		Messages: []ConversationMessage{},
-		ID:       fmt.Sprintf("sess_%d", time.Now().UnixMilli()),
+		ID:       fmt.Sprintf("sess_%d_%x", time.Now().UnixMilli(), suffix),
 	}
 }
 
