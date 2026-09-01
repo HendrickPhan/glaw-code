@@ -28,15 +28,17 @@ type Config struct {
 	Temperature      float64             `json:"temperature"`
 	SystemPromptPath string              `json:"systemPromptPath,omitempty"`
 	PermissionMode   permentity.PermissionMode `json:"permissionMode"`
+	MaxContextMessages int                `json:"maxContextMessages,omitempty"` // Maximum messages to include in context (0 = unlimited)
 }
 
 // DefaultConfig returns sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
-		Model:          "openrouter:nvidia/nemotron-3-super-120b-a12b:free",
-		MaxTokens:      16384,
-		Temperature:    1.0,
-		PermissionMode: permentity.PermWorkspaceWrite,
+		Model:              "openrouter:nvidia/nemotron-3-super-120b-a12b:free",
+		MaxTokens:          16384,
+		Temperature:        1.0,
+		PermissionMode:     permentity.PermWorkspaceWrite,
+		MaxContextMessages: 50, // Keep last 50 messages by default
 	}
 }
 
@@ -64,6 +66,9 @@ func ConfigFromSettings(s config.Settings) *Config {
 	}
 	if s.Permissions.Mode != "" {
 		c.PermissionMode = permentity.PermissionMode(s.Permissions.Mode)
+	}
+	if s.MaxContextMessages > 0 {
+		c.MaxContextMessages = s.MaxContextMessages
 	}
 
 	return c
@@ -175,7 +180,7 @@ type TurnResult struct {
 func (r *ConversationRuntime) Turn(ctx context.Context) (*TurnResult, error) {
 	systemPrompt := r.BuildSystemPrompt()
 	toolDefs := r.BuildToolDefinitions()
-	messages := r.Session.AsAPIMessages()
+	messages := r.Session.AsAPIMessagesWithLimit(r.Config.MaxContextMessages)
 
 	req := api.Request{
 		Model:      r.Config.Model,
@@ -550,13 +555,24 @@ func (r *ConversationRuntime) RunLoop(ctx context.Context) error {
 
 // RunLoopStream executes multiple turns using streaming, calling textCallback
 // with each text delta as it arrives from the API. When a tool_use stop reason
-// is encountered, tool calls are displayed inline and executed, then the loop
-// continues with another streaming turn. This provides real-time output for the CLI.
+// is encountered, tool calls are displayed inline and executed. The function
+// continues processing events from the same stream channel, supporting multiple
+// turns within a single streaming session. This provides real-time output for the CLI.
 //
 // The textCallback receives raw text deltas (not yet markdown-rendered) and should
 // print them to stdout. The caller is responsible for handling the spinner,
 // cursor positioning, etc.
 func (r *ConversationRuntime) RunLoopStream(ctx context.Context, textCallback func(string)) error {
+	// Start a streaming turn
+	ch, err := r.StreamTurn(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return &ActionCancelledError{}
+		}
+		return err
+	}
+
+	// Consume the stream: send text deltas to callback, handle multiple turns
 	for {
 		select {
 		case <-ctx.Done():
@@ -564,8 +580,8 @@ func (r *ConversationRuntime) RunLoopStream(ctx context.Context, textCallback fu
 		default:
 		}
 
-		// Start a streaming turn
-		ch, err := r.StreamTurn(ctx)
+		// Accumulate a single turn from the stream
+		result, err := r.ConsumeStream(ctx, ch, textCallback)
 		if err != nil {
 			if ctx.Err() != nil {
 				return &ActionCancelledError{}
@@ -573,13 +589,9 @@ func (r *ConversationRuntime) RunLoopStream(ctx context.Context, textCallback fu
 			return err
 		}
 
-		// Consume the stream: send text deltas to callback, accumulate final response
-		result, err := r.ConsumeStream(ctx, ch, textCallback)
-		if err != nil {
-			if ctx.Err() != nil {
-				return &ActionCancelledError{}
-			}
-			return err
+		// Channel closed - we're done
+		if result == nil {
+			return nil
 		}
 
 		// Record usage
@@ -590,13 +602,13 @@ func (r *ConversationRuntime) RunLoopStream(ctx context.Context, textCallback fu
 			r.Session.AddAssistantMessage(result.Content, &result.Usage)
 		}
 
-		// If the stop reason is tool_use, execute tools and loop
+		// If the stop reason is tool_use, execute tools and continue to next turn
 		if result.StopReason == api.StopToolUse && len(result.ToolCalls) > 0 {
 			if err := r.RunToolLoopStream(ctx, result.ToolCalls, textCallback); err != nil {
 				return err
 			}
-			// RunToolLoopStream loops back internally, so we're done here
-			return nil
+			// After tool execution, continue consuming the same stream for next turn
+			continue
 		}
 
 		// End turn — not tool_use, so we're done
@@ -695,7 +707,7 @@ func (r *ConversationRuntime) ConsumeStream(ctx context.Context, ch <-chan api.S
 func (r *ConversationRuntime) StreamTurn(ctx context.Context) (<-chan api.StreamEvent, error) {
 	req := api.Request{
 		Model:      r.Config.Model,
-		Messages:   r.Session.AsAPIMessages(),
+		Messages:   r.Session.AsAPIMessagesWithLimit(r.Config.MaxContextMessages),
 		Tools:      r.BuildToolDefinitions(),
 			MaxTokens:  r.Config.MaxTokens,
 		Stream:     true,
@@ -817,9 +829,10 @@ func extractTextFromAnthropicDelta(rawJSON []byte) string {
 	return ""
 }
 
-// RunToolLoopStream executes tool calls from a previously streamed turn and then
-// continues the conversation loop via RunLoopStream. This enables the full
-// agentic streaming flow: stream text → display tools → loop back to streaming.
+// RunToolLoopStream executes tool calls from a previously streamed turn.
+// After tool execution, the caller (RunLoopStream) continues consuming the
+// same stream for the next turn's events. This enables the full agentic
+// streaming flow: stream text → display tools → execute tools → continue stream.
 func (r *ConversationRuntime) RunToolLoopStream(ctx context.Context, toolCalls []api.ContentBlock, textCallback func(string)) error {
 	for _, tc := range toolCalls {
 		select {
@@ -855,8 +868,8 @@ func (r *ConversationRuntime) RunToolLoopStream(ctx context.Context, toolCalls [
 		}
 	}
 
-	// Continue the agentic loop — stream the next turn
-	return r.RunLoopStream(ctx, textCallback)
+	// Tools executed successfully — caller will continue consuming the stream
+	return nil
 }
 
 // RunToolLoop continues executing tool calls after a response.

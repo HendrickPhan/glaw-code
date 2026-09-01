@@ -83,11 +83,23 @@ func (s *Session) MessageCount() int {
 
 // AsAPIMessages converts session messages to API format.
 func (s *Session) AsAPIMessages() []api.Message {
+	return s.AsAPIMessagesWithLimit(0)
+}
+
+// AsAPIMessagesWithLimit converts session messages to API format, optionally
+// limiting to the last N messages (when maxMessages > 0). When maxMessages is 0,
+// all messages are included. The sliding window ensures recent context is preserved.
+func (s *Session) AsAPIMessagesWithLimit(maxMessages int) []api.Message {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	messages := s.Messages
+	if maxMessages > 0 && len(messages) > maxMessages {
+		messages = messages[len(messages)-maxMessages:]
+	}
+
 	var msgs []api.Message
-	for _, m := range s.Messages {
+	for _, m := range messages {
 		if len(m.Blocks) == 0 {
 			continue
 		}

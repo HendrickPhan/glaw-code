@@ -1,6 +1,7 @@
 package entity
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 
@@ -131,5 +132,60 @@ func TestSessionConcurrency(t *testing.T) {
 	wg.Wait()
 	if s.MessageCount() != 100 {
 		t.Errorf("count = %d, want 100", s.MessageCount())
+	}
+}
+
+func TestAsAPIMessagesWithLimit_SlidingWindow(t *testing.T) {
+	s := NewSession()
+
+	// Add 10 messages
+	for i := 0; i < 10; i++ {
+		s.AddUserMessageFromText(fmt.Sprintf("message %d", i))
+		s.AddAssistantMessage([]api.ContentBlock{api.NewTextBlock(fmt.Sprintf("response %d", i))}, nil)
+	}
+
+	// Without limit, should get all 20 messages (10 user + 10 assistant)
+	allMsgs := s.AsAPIMessagesWithLimit(0)
+	if len(allMsgs) != 20 {
+		t.Errorf("without limit: len = %d, want 20", len(allMsgs))
+	}
+
+	// With limit of 10 messages (5 pairs), should get last 10
+	limitedMsgs := s.AsAPIMessagesWithLimit(10)
+	if len(limitedMsgs) != 10 {
+		t.Errorf("with limit 10: len = %d, want 10", len(limitedMsgs))
+	}
+
+	// Verify we got the LAST 10 messages, not the first 10
+	// The first limited message should be "message 5" (0-indexed: messages 5-9)
+	if limitedMsgs[0].Content[0].Text != "message 5" {
+		t.Errorf("first limited message = %q, want 'message 5'", limitedMsgs[0].Content[0].Text)
+	}
+
+	// With limit of 4 messages (2 pairs), should get last 4
+	tinyMsgs := s.AsAPIMessagesWithLimit(4)
+	if len(tinyMsgs) != 4 {
+		t.Errorf("with limit 4: len = %d, want 4", len(tinyMsgs))
+	}
+
+	// Verify we got the LAST 4 messages
+	// The first message should be "message 8" (0-indexed: messages 8-9)
+	if tinyMsgs[0].Content[0].Text != "message 8" {
+		t.Errorf("first tiny message = %q, want 'message 8'", tinyMsgs[0].Content[0].Text)
+	}
+}
+
+func TestAsAPIMessagesWithLimit_NoopWhenBelowLimit(t *testing.T) {
+	s := NewSession()
+
+	// Add only 3 messages
+	s.AddUserMessageFromText("msg1")
+	s.AddAssistantMessage([]api.ContentBlock{api.NewTextBlock("resp1")}, nil)
+	s.AddUserMessageFromText("msg2")
+
+	// With limit of 10 but only 3 messages, should get all 3
+	msgs := s.AsAPIMessagesWithLimit(10)
+	if len(msgs) != 3 {
+		t.Errorf("len = %d, want 3", len(msgs))
 	}
 }

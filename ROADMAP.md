@@ -111,17 +111,17 @@ Finish migrating remaining flat packages into the `internal/modules/` structure 
 
 ### 1.2 Streaming in the CLI REPL
 
-**Priority:** P0 · **Effort:** L
+**Priority:** P0 · **Effort:** L · **Status:** ✅ Done
 
 The REPL currently blocks until the full LLM response arrives. This feels slow even with fast models.
 
-> **Note:** Streaming infrastructure has been built at the API layer (`StreamMessage()` for Anthropic and OpenAI-compatible clients with full SSE parsing) and runtime layer (`StreamTurn()`, `AccumulateStream()`, `RunToolLoopStream()`). However, the REPL does not yet use these methods — `Turn()` is called with `Stream: false`. The remaining work is wiring the REPL to call the streaming path.
+> **Note:** Streaming infrastructure has been built at the API layer (`StreamMessage()` for Anthropic and OpenAI-compatible clients with full SSE parsing) and runtime layer (`StreamTurn()`, `AccumulateStream()`, `RunToolLoopStream()`). The REPL now uses the streaming path by default.
 
-- [ ] Wire the REPL to use `StreamTurn()` / `RunToolLoopStream()` instead of `Turn()` with `Stream: false`
-- [ ] Stream text content character-by-character (typewriter effect)
-- [ ] Show tool calls as they arrive (not after the full response)
-- [ ] Add a `--no-stream` flag for users who prefer buffered output
-- [ ] Handle stream interruption (Ctrl+C mid-stream)
+- [x] Wire the REPL to use `StreamTurn()` / `RunToolLoopStream()` instead of `Turn()` with `Stream: false`
+- [x] Stream text content character-by-character (typewriter effect)
+- [x] Show tool calls as they arrive (not after the full response)
+- [x] Add a `--no-stream` flag for users who prefer buffered output
+- [x] Handle stream interruption (Ctrl+C mid-stream)
 
 ### 1.3 Structured Logging
 
@@ -203,7 +203,7 @@ internal/modules/tools/infrastructure/registry/
 
 The current system sends the full conversation history to the LLM every turn. This is expensive and hits context window limits.
 
-- [ ] Implement **sliding window** — keep last N messages + system prompt
+- [x] Implement **sliding window** — keep last N messages + system prompt (default: 50 messages)
 - [ ] Implement **smart compaction** — summarize older turns into a compact summary
 - [ ] Add **RAG-lite** — index project files locally and inject relevant context
 - [ ] Support **context window management** — track token usage per turn, auto-compact when approaching limits

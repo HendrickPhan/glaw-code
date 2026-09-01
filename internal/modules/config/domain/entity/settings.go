@@ -42,17 +42,18 @@ type MCPServerConfig struct {
 
 // Settings represents the full user configuration file.
 type Settings struct {
-	Model          string                      `json:"model,omitempty"`
-	Permissions     PermissionSettings          `json:"permissions"`
-	MaxTokens       int                         `json:"maxTokens,omitempty"`
-	Temperature     *float64                    `json:"temperature,omitempty"`
-	APIKey          string                     `json:"apiKey,omitempty"`
-	APIBaseURL      string                     `json:"apiBaseUrl,omitempty"`
-	SystemPrompt    string                     `json:"systemPrompt,omitempty"`
-	Plugins         PluginSettings                `json:"plugins"`
-	Env             map[string]string             `json:"env,omitempty"`
-	EnabledPlugins  map[string]bool               `json:"enabledPlugins,omitempty"`
-	MCPServers      map[string]*MCPServerConfig `json:"mcpServers,omitempty"`
+	Model              string                      `json:"model,omitempty"`
+	Permissions        PermissionSettings          `json:"permissions"`
+	MaxTokens          int                         `json:"maxTokens,omitempty"`
+	Temperature        *float64                    `json:"temperature,omitempty"`
+	APIKey             string                     `json:"apiKey,omitempty"`
+	APIBaseURL         string                     `json:"apiBaseUrl,omitempty"`
+	SystemPrompt       string                     `json:"systemPrompt,omitempty"`
+	MaxContextMessages int                        `json:"maxContextMessages,omitempty"` // Maximum messages in context (0 = unlimited)
+	Plugins            PluginSettings                `json:"plugins"`
+	Env                map[string]string             `json:"env,omitempty"`
+	EnabledPlugins     map[string]bool               `json:"enabledPlugins,omitempty"`
+	MCPServers         map[string]*MCPServerConfig `json:"mcpServers,omitempty"`
 }
 
 // DefaultSettings returns the built-in defaults.
@@ -140,6 +141,9 @@ func Merge(base, overlay Settings) Settings {
 	}
 	if overlay.SystemPrompt != "" {
 		result.SystemPrompt = overlay.SystemPrompt
+	}
+	if overlay.MaxContextMessages > 0 {
+		result.MaxContextMessages = overlay.MaxContextMessages
 	}
 	if len(overlay.Plugins.Enabled) > 0 {
 		result.Plugins.Enabled = overlay.Plugins.Enabled
