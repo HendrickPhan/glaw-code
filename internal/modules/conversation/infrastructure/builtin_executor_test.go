@@ -111,7 +111,9 @@ func TestBuiltinToolExecutorReadNonexistent(t *testing.T) {
 func TestBuiltinToolExecutorEditNoMatch(t *testing.T) {
 	dir := t.TempDir()
 	exec := NewBuiltinToolExecutor(dir)
-	os.WriteFile(filepath.Join(dir, "test.txt"), []byte("hello"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "test.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := exec.ExecuteTool(context.Background(), "edit_file", json.RawMessage(
 		`{"path":"test.txt","old_string":"xyz","new_string":"abc"}`))
